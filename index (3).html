@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FutAnalytics · Análise diária de futebol</title>
+<style>
+:root{
+  --bg:#0b1120; --bg2:#111a2e; --card:#16223a; --card2:#1c2b48;
+  --line:#24344f; --txt:#e6edf7; --mut:#8fa3c0; --green:#2fd48a;
+  --green-d:#0f3b2a; --amber:#f5b942; --red:#f06a6a; --blue:#5aa2ff;
+  --radius:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
+a{color:var(--blue)}
+header{position:sticky;top:0;z-index:50;background:rgba(11,17,32,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.hwrap{max-width:1180px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.logo{font-size:19px;font-weight:800;letter-spacing:.3px}
+.logo span{color:var(--green)}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:none;color:var(--mut);font:600 14px inherit;padding:8px 14px;border-radius:9px;cursor:pointer}
+nav button.active{background:var(--card2);color:var(--txt)}
+nav button:hover{color:var(--txt)}
+.bank{margin-left:auto;font-size:13px;color:var(--mut)}
+.bank b{color:var(--green);font-size:15px}
+main{max-width:1180px;margin:0 auto;padding:24px 20px 80px}
+h2{font-size:20px;margin-bottom:4px}
+.sub{color:var(--mut);font-size:13.5px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.grid{display:grid;gap:16px}
+@media(min-width:900px){.grid.two{grid-template-columns:1fr 1fr}}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:700;letter-spacing:.4px}
+.pill.green{background:var(--green-d);color:var(--green)}
+.pill.amber{background:#3d2f12;color:var(--amber)}
+.pill.blue{background:#14304f;color:var(--blue)}
+.pill.red{background:#3d1a1a;color:var(--red)}
+.pill.gray{background:#23304a;color:var(--mut)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.spacer{flex:1}
+.matchcard{border:1px solid var(--line);border-radius:var(--radius);background:var(--card);overflow:hidden;margin-bottom:14px}
+.matchcard.best{border-color:var(--green);box-shadow:0 0 0 1px var(--green)}
+.mhead{padding:14px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--bg2)}
+.teams{font-size:16.5px;font-weight:700}
+.mbody{padding:16px 18px;display:grid;gap:14px}
+@media(min-width:840px){.mbody{grid-template-columns:1.2fr 1fr 1fr}}
+.stat{font-size:13px;color:var(--mut)}
+.stat b{color:var(--txt);font-weight:700}
+.bigpick{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+.bigpick .lab{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;font-weight:700}
+.bigpick .val{font-size:16px;font-weight:800;margin-top:2px}
+.bar{height:7px;background:#233049;border-radius:99px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:99px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{color:var(--mut);text-align:left;font-weight:600;padding:7px 8px;border-bottom:1px solid var(--line);font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+td{padding:8px;border-bottom:1px solid #1d2a44}
+tr:last-child td{border-bottom:none}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+button.btn{background:var(--green);color:#06281a;border:none;font:700 13.5px inherit;padding:9px 16px;border-radius:9px;cursor:pointer}
+button.btn:hover{filter:brightness(1.08)}
+button.btn.ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+button.btn.sm{padding:5px 11px;font-size:12.5px}
+button.btn.red{background:#4a2020;color:var(--red)}
+button.btn.blue{background:#173a63;color:var(--blue)}
+input,select{background:var(--bg2);border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:9px 12px;font:14px inherit;width:100%}
+label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bottom:5px}
+.field{margin-bottom:14px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.kpi .k{font-size:12px;color:var(--mut);font-weight:600}
+.kpi .v{font-size:21px;font-weight:800;margin-top:2px}
+.v.pos{color:var(--green)}.v.neg{color:var(--red)}
+.empty{color:var(--mut);text-align:center;padding:40px 10px;font-size:14px}
+.loading{text-align:center;padding:60px 0;color:var(--mut)}
+.spin{display:inline-block;width:26px;height:26px;border:3px solid var(--line);border-top-color:var(--green);border-radius:50%;animation:sp 0.8s linear infinite;margin-bottom:10px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--card2);border:1px solid var(--green);color:var(--txt);padding:11px 20px;border-radius:11px;font-size:14px;z-index:99;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.warn{background:#2d2413;border:1px solid #5c4a1e;color:#f0d48a;border-radius:11px;padding:12px 16px;font-size:13.5px;margin-bottom:16px}
+.method h3{margin:18px 0 6px;font-size:16px}
+.method p,.method li{color:#c7d4e8;font-size:14px;margin-bottom:8px}
+.method ul{padding-left:22px}
+.legrow{display:flex;gap:10px;align-items:baseline;padding:9px 0;border-bottom:1px solid #1d2a44;font-size:14px;flex-wrap:wrap}
+.legrow:last-child{border-bottom:none}
+.datebar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+.datebar input{width:auto}
+.oddtag{font-variant-numeric:tabular-nums;font-weight:800;color:var(--amber)}
+.small{font-size:12.5px;color:var(--mut)}
+</style>
+</head>
+<body>
+<header>
+  <div class="hwrap">
+    <div class="logo">Fut<span>Analytics</span></div>
+    <nav>
+      <button data-tab="day" class="active">Painel do dia</button>
+      <button data-tab="bets">Meus bilhetes</button>
+      <button data-tab="settings">Configurações</button>
+      <button data-tab="method">Metodologia</button>
+    </nav>
+    <div class="bank">Banca: <b id="bankTop">—</b></div>
+  </div>
+</header>
+<main>
+  <section id="tab-day">
+    <h2>Painel do dia</h2>
+    <div class="sub">Jogos analisados pelo modelo Poisson/Dixon-Coles com foco em mercados de gols. A aposta do dia e a múltipla sugerida aparecem no topo.</div>
+    <div class="datebar">
+      <input type="date" id="dayPick">
+      <button class="btn ghost" id="reload">Atualizar análise</button>
+      <span class="small" id="provTag"></span>
+    </div>
+    <div id="dayContent"><div class="loading"><div class="spin"></div><br>Analisando jogos do dia...</div></div>
+  </section>
+
+  <section id="tab-bets" style="display:none">
+    <h2>Meus bilhetes</h2>
+    <div class="sub">Registre resultados para acompanhar taxa de acerto, ROI e evolução da banca. Disciplina de registro é metade do lucro.</div>
+    <div class="kpis" id="betKpis"></div>
+    <div class="card"><div id="betList"></div></div>
+  </section>
+
+  <section id="tab-settings" style="display:none">
+    <h2>Configurações</h2>
+    <div class="sub">Fonte de dados, chaves de API e gestão de banca.</div>
+    <div class="grid two">
+      <div class="card">
+        <h3 style="margin-bottom:12px">Fonte de dados</h3>
+        <div class="field">
+          <label>Provedor</label>
+          <select id="sProvider">
+            <option value="demo">Demonstração (sem chave, dados simulados)</option>
+            <option value="fd">football-data.org (grátis · jogos e resultados reais)</option>
+            <option value="af">API-Football (grátis 100 req/dia · jogos + odds reais)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Token football-data.org (recomendado para jogos de hoje, grátis)</label>
+          <input id="sFd" placeholder="cole o token aqui" autocomplete="off">
+          <div class="small" style="margin-top:4px">Grátis em football-data.org/client/register: o tier gratuito cobre a temporada ATUAL do Brasileirão A, Champions e top 5 ligas da Europa (sem odds; o modelo usa odds justas).</div>
+        </div>
+        <div class="field">
+          <label>Chave API-Football (api-sports.io)</label>
+          <input id="sAf" placeholder="cole a chave aqui" autocomplete="off">
+          <div class="small" style="margin-top:4px">Atenção: o plano gratuito da API-Football hoje só libera temporadas antigas (2021 a 2023), então NÃO serve para os jogos do dia sem plano pago. Use a chave direta do dashboard.api-football.com (não a do RapidAPI). Com plano pago, é a melhor fonte: Série A/B, Copa do Brasil, Libertadores e odds reais.</div>
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn" id="saveProvider">Salvar fonte de dados</button>
+          <button class="btn ghost" id="testFd">Testar football-data</button>
+          <button class="btn ghost" id="testAf">Testar API-Football</button>
+        </div>
+        <div id="testResult" style="margin-top:12px"></div>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px">Gestão de banca</h3>
+        <div class="field"><label>Banca atual (R$)</label><input id="sBank" type="number" step="10"></div>
+        <div class="field"><label>Fração de Kelly (0.1 a 0.5 · recomendado 0.25)</label><input id="sKelly" type="number" step="0.05" min="0.05" max="1"></div>
+        <div class="field"><label>Teto por aposta (% da banca · recomendado 2 a 3%)</label><input id="sCap" type="number" step="0.5" min="0.5" max="10"></div>
+        <div class="field"><label>EV mínimo para recomendar (% · recomendado 3%)</label><input id="sEv" type="number" step="0.5"></div>
+        <div class="field"><label>Probabilidade mínima por perna da múltipla (%)</label><input id="sProb" type="number" step="1" min="50" max="90"></div>
+        <button class="btn" id="saveBank">Salvar gestão</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-method" style="display:none">
+    <h2>Metodologia</h2>
+    <div class="sub">O que o modelo faz, o que ele não faz, e as regras que sustentam consistência no longo prazo.</div>
+    <div class="card method">
+      <h3>1. O princípio que governa tudo: valor esperado</h3>
+      <p>Aposta lucrativa no longo prazo não é a que "parece que vai ganhar", é aquela em que a probabilidade real do evento é maior do que a probabilidade embutida na odd. Se o modelo estima 60% para mais de 2.5 gols e a casa paga 1.85 (que implica 54%), há valor: EV = 0,60 × 1,85 − 1 = +11%. Apostar sistematicamente só quando há valor positivo é a única estratégia matematicamente sustentável. Sem isso, qualquer sequência de greens é sorte com prazo de validade.</p>
+      <h3>2. Como o modelo calcula as probabilidades</h3>
+      <ul>
+        <li>Força de ataque e defesa de cada time, separada em casa e fora, a partir dos jogos recentes com decaimento temporal (o jogo de ontem pesa mais que o de três meses atrás).</li>
+        <li>Regularização bayesiana: com amostra pequena, as forças são puxadas para a média da liga, evitando conclusões extremas a partir de meia dúzia de jogos.</li>
+        <li>Gols esperados de cada lado combinando ataque próprio com defesa adversária e mando de campo.</li>
+        <li>Matriz completa de placares via Poisson com correção de Dixon-Coles, que ajusta a distorção do Poisson puro em placares baixos (0x0, 1x0, 0x1, 1x1).</li>
+        <li>Dessa matriz saem as probabilidades de Over/Under, ambas marcam, 1X2 e dupla chance.</li>
+      </ul>
+      <h3>3. Por que o foco em mercados de gols</h3>
+      <p>Over/Under e BTTS são os mercados mais modeláveis estatisticamente: dependem de taxas de gols, que são mais estáveis e previsíveis do que o resultado exato de um jogo, onde o empate e episódios aleatórios (expulsão, pênalti, gol contra) pesam demais. É também onde modelos de Poisson têm o histórico acadêmico mais sólido.</p>
+      <h3>4. Gestão de banca: Kelly fracionado com trava</h3>
+      <p>A stake sugerida usa o critério de Kelly, que dimensiona a aposta proporcionalmente à vantagem detectada, multiplicado por uma fração (padrão 0,25) porque o Kelly cheio assume que o modelo está perfeitamente calibrado, o que nunca é verdade. Há ainda um teto por aposta (padrão 3% da banca). Em múltiplas a fração é reduzida ainda mais, porque o erro do modelo se multiplica a cada perna.</p>
+      <h3>5. Regras de disciplina (as que separam lucro de prejuízo)</h3>
+      <ul>
+        <li>Nunca aumente a stake para "recuperar" uma perda. O modelo não sabe que você perdeu ontem, e a odd também não.</li>
+        <li>Registre todas as apostas na aba Bilhetes, inclusive as ruins. ROI real só existe com registro completo.</li>
+        <li>Avalie o desempenho em blocos de 100+ apostas, nunca na semana. Variância em amostra pequena engole qualquer vantagem.</li>
+        <li>Múltiplas são opcionais e mais arriscadas: a casa multiplica a margem dela a cada perna. Use com stake reduzida, como a plataforma sugere.</li>
+        <li>Desconfie de EV alto demais (acima de 20%): quase sempre é erro de dado (desfalque em massa, time reserva, jogo sem importância) que o modelo não enxerga. Confira a notícia antes.</li>
+      </ul>
+      <h3>6. O que o modelo não enxerga (e você deve conferir)</h3>
+      <p>Escalações e desfalques do dia, times poupando para outra competição, condições de clima e gramado, motivação em fim de campeonato, mudança recente de treinador. Um filtro humano de 5 minutos por jogo em cima da sugestão do modelo aumenta materialmente a qualidade das entradas.</p>
+      <h3>7. Expectativa honesta</h3>
+      <p>Apostador vencedor de longo prazo trabalha com ROI entre 2% e 8% ao ano sobre o volume apostado, com meses negativos no caminho. Qualquer promessa acima disso é marketing. Esta plataforma existe para encontrar valor e impor disciplina, não para garantir green diário; esse produto não existe.</p>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast" style="display:none"></div>
+
+<script>
+const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
+const fmt=n=>'R$ '+Number(n).toFixed(2).replace('.',',');
+const pct=p=>(p*100).toFixed(1).replace('.',',')+'%';
+let SETTINGS=null, DAY=null;
+
+function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2600);}
+
+$$('nav button').forEach(b=>b.onclick=()=>{
+  $$('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  $$('main > section').forEach(s=>s.style.display='none');
+  $('#tab-'+b.dataset.tab).style.display='';
+  if(b.dataset.tab==='bets')loadBets();
+});
+
+async function api(path,opts){
+  let r;
+  try{r=await fetch(path,opts);}
+  catch(e){throw new Error('Sem conexão com o servidor. Abra a plataforma pela pré-visualização do app FutAnalytics (servidor rodando), não pelo arquivo index.html: o visualizador de arquivo não tem acesso à rede.');}
+  if(!r.ok){let d;try{d=await r.json()}catch(e){d={detail:r.statusText}}throw new Error(d.detail||('erro '+r.status));}
+  return r.json();
+}
+
+async function loadSettings(){
+  SETTINGS=await api('/api/settings');
+  $('#bankTop').textContent=fmt(SETTINGS.bankroll);
+  $('#sProvider').value=SETTINGS.provider;
+  $('#sFd').value=SETTINGS.fd_token; $('#sAf').value=SETTINGS.af_key;
+  $('#sBank').value=SETTINGS.bankroll; $('#sKelly').value=SETTINGS.kelly_fraction;
+  $('#sCap').value=SETTINGS.stake_cap_pct; $('#sEv').value=SETTINGS.min_ev; $('#sProb').value=SETTINGS.min_prob;
+}
+$('#saveProvider').onclick=async()=>{
+  await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({provider:$('#sProvider').value,fd_token:$('#sFd').value,af_key:$('#sAf').value})});
+  toast('Fonte de dados salva');await loadSettings();loadDay();
+};
+async function testProv(which,btn){
+  const box=$('#testResult');
+  btn.disabled=true;btn.textContent='Testando...';
+  box.innerHTML='<span class="small">Consultando o provedor...</span>';
+  try{
+    // salva o que está nos campos antes de testar
+    await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({fd_token:$('#sFd').value,af_key:$('#sAf').value})});
+    const r=await api('/api/test-provider?which='+which);
+    box.innerHTML=`<div class="${r.ok?'card':'warn'}" style="margin:0;padding:12px 14px;font-size:13.5px;${r.ok?'border-color:var(--green)':''}">${r.ok?'✅ ':'⚠️ '}${r.msg}</div>`;
+  }catch(e){
+    box.innerHTML=`<div class="warn" style="margin:0">Erro no teste: ${e.message}</div>`;
+  }finally{
+    btn.disabled=false;btn.textContent=which==='fd'?'Testar football-data':'Testar API-Football';
+  }
+}
+$('#testFd').onclick=e=>testProv('fd',e.target);
+$('#testAf').onclick=e=>testProv('af',e.target);
+$('#saveBank').onclick=async()=>{
+  await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({bankroll:+$('#sBank').value,kelly_fraction:+$('#sKelly').value,
+      stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,min_prob:+$('#sProb').value})});
+  toast('Gestão de banca salva');await loadSettings();loadDay();
+};
+
+function hhmm(iso){try{const d=new Date(iso);return d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
+
+function marketRows(fx){
+  const mk=fx.analysis.markets, fo=fx.analysis.fair_odds, odds=fx.odds||{};
+  const order=['over_1.5','over_2.5','under_2.5','btts_yes','btts_no','over_3.5','home','draw','away','dc_1x','dc_x2'];
+  const L={"over_1.5":"Over 1.5","over_2.5":"Over 2.5","under_2.5":"Under 2.5","btts_yes":"BTTS sim","btts_no":"BTTS não","over_3.5":"Over 3.5","under_3.5":"Under 3.5","home":"Casa","draw":"Empate","away":"Fora","dc_1x":"DC 1X","dc_x2":"DC X2","dc_12":"DC 12"};
+  return order.map(k=>{
+    const o=odds[k], p=mk[k];
+    const ev=o?(p*o-1):null;
+    const evCell=ev===null?'<span class="small">—</span>':`<span style="color:${ev>0?'var(--green)':'var(--red)'}">${(ev*100).toFixed(1)}%</span>`;
+    return `<tr><td>${L[k]}</td><td class="num">${pct(p)}</td><td class="num">${fo[k].toFixed(2)}</td><td class="num">${o?o.toFixed(2):'—'}</td><td class="num">${evCell}</td></tr>`;
+  }).join('');
+}
+
+function renderFixture(fx,isBest){
+  const a=fx.analysis,b=fx.best;
+  const evTag=b&&b.ev!==null?`<span class="pill ${b.ev>0?'green':'red'}">EV ${(b.ev*100).toFixed(1)}%</span>`:(b?'<span class="pill gray">odd justa</span>':'');
+  const pick=b?`
+    <div class="bigpick">
+      <div class="lab">${isBest?'⭐ Aposta do dia':'Melhor mercado'}</div>
+      <div class="val">${b.label} <span class="oddtag">@${b.odd.toFixed(2)}</span></div>
+      <div class="small">probabilidade do modelo ${pct(b.prob)} ${b.odd_is_fair?'(odd justa, sem odds de mercado)':''}</div>
+      <div class="bar"><i style="width:${(b.prob*100).toFixed(0)}%"></i></div>
+      <div class="row" style="margin-top:10px">
+        ${evTag}
+        ${fx.stake&&fx.stake.stake>0?`<span class="pill blue">stake ${fmt(fx.stake.stake)} (${fx.stake.pct}%)</span>`:''}
+        <span class="spacer"></span>
+        <button class="btn sm" onclick='saveSingle(${JSON.stringify(fx.id)})'>Registrar bilhete</button>
+      </div>
+    </div>`:'<div class="small">Sem mercado com valor suficiente neste jogo.</div>';
+  return `<div class="matchcard ${isBest?'best':''}" id="fx-${fx.id}">
+    <div class="mhead">
+      <span class="pill blue">${fx.league}</span>
+      <span class="teams">${fx.home.name} <span style="color:var(--mut)">x</span> ${fx.away.name}</span>
+      <span class="spacer"></span>
+      <span class="small">${hhmm(fx.kickoff_utc)} · confiança do modelo ${pct(a.confidence)}</span>
+    </div>
+    <div class="mbody">
+      <div>
+        <div class="stat">Gols esperados: <b>${a.lambda_home}</b> x <b>${a.lambda_away}</b> (total <b>${a.expected_goals_total}</b>)</div>
+        <div class="stat">Forma (últimos 5): casa <b>${pct(a.form_home)}</b> · fora <b>${pct(a.form_away)}</b></div>
+        <div class="stat">Placares prováveis: ${a.top_scores.map(s=>`<b>${s.score}</b> (${pct(s.prob)})`).join(' · ')}</div>
+        <div class="stat small" style="margin-top:6px">Amostra: ${a.sample_home} jogos (casa) · ${a.sample_away} (fora), ponderada por recência</div>
+      </div>
+      <div>${pick}</div>
+      <div style="overflow-x:auto"><table>
+        <tr><th>Mercado</th><th class="num">Prob</th><th class="num">Justa</th><th class="num">Mercado</th><th class="num">EV</th></tr>
+        ${marketRows(fx)}
+      </table></div>
+    </div>
+  </div>`;
+}
+
+function renderMultiple(m){
+  if(!m)return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem pernas suficientes com probabilidade acima do mínimo configurado. Dia de poucos jogos confiáveis é dia de apostar menos, não de forçar entrada.</div></div>`;
+  return `<div class="card" style="border-color:var(--amber)">
+    <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3><span class="spacer"></span>
+      <span class="pill amber">odd combinada ${m.combined_odd.toFixed(2)}</span>
+      <span class="pill ${m.ev>0?'green':'red'}">EV ${(m.ev*100).toFixed(1)}%</span>
+    </div>
+    <div style="margin:10px 0">
+      ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span><span class="oddtag">@${l.odd.toFixed(2)}</span><span class="small">${pct(l.prob)}</span></div>`).join('')}
+    </div>
+    <div class="row">
+      <span class="stat">Probabilidade combinada: <b>${pct(m.combined_prob)}</b></span>
+      ${m.stake&&m.stake.stake>0?`<span class="pill blue">stake sugerida ${fmt(m.stake.stake)} (${m.stake.pct}%)</span>`:'<span class="pill gray">sem stake: EV insuficiente</span>'}
+      <span class="spacer"></span>
+      <button class="btn sm" onclick="saveMultiple()">Registrar múltipla</button>
+    </div>
+  </div>`;
+}
+
+async function loadDay(){
+  const day=$('#dayPick').value||new Date().toISOString().slice(0,10);
+  $('#dayContent').innerHTML='<div class="loading"><div class="spin"></div><br>Analisando jogos do dia...<br><span class="small">Na primeira carga do dia com a football-data.org isso pode levar alguns minutos: a API gratuita limita 10 consultas por minuto e cada time exige uma consulta de histórico. Depois fica em cache e abre na hora.</span></div>';
+  try{
+    DAY=await api('/api/day?day='+day);
+    $('#provTag').textContent={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'';
+    let html='';
+    if(DAY.provider==='demo')html+=`<div class="warn">Você está no modo demonstração com dados simulados. Configure uma chave gratuita em Configurações para analisar jogos reais do dia.</div>`;
+    if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;
+    if(!DAY.fixtures.length){html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data. Tente outra data ou outro provedor.</div></div>`;}
+    else{
+      html+=renderMultiple(DAY.multiple);
+      const best=DAY.fixtures.find(f=>f.id===DAY.best_single);
+      const rest=DAY.fixtures.filter(f=>f.id!==DAY.best_single)
+        .sort((a,b)=>((b.best?b.best.score:-9))-((a.best?a.best.score:-9)));
+      if(best)html+=renderFixture(best,true);
+      html+=rest.map(f=>renderFixture(f,false)).join('');
+    }
+    $('#dayContent').innerHTML=html;
+  }catch(e){
+    $('#dayContent').innerHTML=`<div class="warn">Erro ao carregar: ${e.message}</div>`;
+  }
+}
+$('#reload').onclick=loadDay;
+$('#dayPick').onchange=loadDay;
+
+async function saveSingle(id){
+  const fx=DAY.fixtures.find(f=>f.id===id); if(!fx||!fx.best)return;
+  await api('/api/bets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    match_date:DAY.day,label:`${fx.home.name} x ${fx.away.name}`,market:fx.best.market,
+    selection:fx.best.label,odd:fx.best.odd,stake:fx.stake?fx.stake.stake:0,prob:fx.best.prob})});
+  toast('Bilhete registrado');
+}
+async function saveMultiple(){
+  const m=DAY.multiple; if(!m)return;
+  await api('/api/bets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    match_date:DAY.day,label:`Múltipla ${m.legs.length} pernas`,market:'multipla',
+    selection:m.legs.map(l=>`${l.match}: ${l.label}`).join(' | '),
+    odd:m.combined_odd,stake:m.stake?m.stake.stake:0,prob:m.combined_prob,is_multiple:true,legs:m.legs})});
+  toast('Múltipla registrada');
+}
+
+async function loadBets(){
+  const d=await api('/api/bets');
+  const s=d.stats;
+  $('#betKpis').innerHTML=`
+    <div class="kpi"><div class="k">Apostas</div><div class="v">${s.total}</div></div>
+    <div class="kpi"><div class="k">Em aberto</div><div class="v">${s.open}</div></div>
+    <div class="kpi"><div class="k">Taxa de acerto</div><div class="v">${s.hit_rate===null?'—':s.hit_rate+'%'}</div></div>
+    <div class="kpi"><div class="k">Volume apostado</div><div class="v">${fmt(s.staked)}</div></div>
+    <div class="kpi"><div class="k">Lucro</div><div class="v ${s.profit>0?'pos':(s.profit<0?'neg':'')}">${fmt(s.profit)}</div></div>
+    <div class="kpi"><div class="k">ROI</div><div class="v ${s.roi>0?'pos':(s.roi<0?'neg':'')}">${s.roi===null?'—':s.roi+'%'}</div></div>`;
+  if(!d.bets.length){$('#betList').innerHTML='<div class="empty">Nenhum bilhete registrado ainda. Registre pelo Painel do dia.</div>';return;}
+  $('#betList').innerHTML=`<div style="overflow-x:auto"><table>
+    <tr><th>Data</th><th>Aposta</th><th class="num">Odd</th><th class="num">Stake</th><th>Status</th><th class="num">Lucro</th><th></th></tr>
+    ${d.bets.map(b=>`<tr>
+      <td class="small">${b.match_date}</td>
+      <td><b>${b.label}</b><br><span class="small">${b.selection}</span></td>
+      <td class="num">${b.odd.toFixed(2)}</td>
+      <td class="num">${fmt(b.stake)}</td>
+      <td>${b.status==='open'?`
+        <button class="btn sm" onclick="settle(${b.id},'won')">Green</button>
+        <button class="btn sm red" onclick="settle(${b.id},'lost')">Red</button>
+        <button class="btn sm ghost" onclick="settle(${b.id},'void')">Anulada</button>`
+        :`<span class="pill ${b.status==='won'?'green':(b.status==='lost'?'red':'gray')}">${{won:'GREEN',lost:'RED',void:'ANULADA'}[b.status]}</span>`}
+      </td>
+      <td class="num" style="color:${b.profit>0?'var(--green)':(b.profit<0?'var(--red)':'var(--mut)')}">${b.status==='open'?'—':fmt(b.profit)}</td>
+      <td><button class="btn sm ghost" onclick="delBet(${b.id})">✕</button></td>
+    </tr>`).join('')}
+  </table></div>`;
+}
+async function settle(id,st){const r=await api(`/api/bets/${id}/settle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:st})});toast(st==='won'?'Green registrado, banca atualizada':'Resultado registrado');$('#bankTop').textContent=fmt(r.bankroll);loadBets();}
+async function delBet(id){await api('/api/bets/'+id,{method:'DELETE'});loadBets();}
+
+(async()=>{
+  $('#dayPick').value=new Date().toISOString().slice(0,10);
+  await loadSettings();
+  loadDay();
+})();
+</script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a3385bb0ba2ddba8',t:'MTc4ODE0MDc1MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v3d52b47920f24c319d37e2661827c42b1787588026925" integrity="sha512-d9sL6GJLXn6fInD1+TVXhTcQOsmxeHfmHAvwGDIxp5TO+uo1fiWW7mHomMj4MLRlCsJDTqXzWLHJFFlPCEIj/A==" data-cf-beacon='{"version":"2024.11.0","token":"1954b47c125f43f8b4338b3c4f804e4f"}' crossorigin="anonymous"></script>
+</body>
+</html>
