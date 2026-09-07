@@ -28,8 +28,10 @@ Chaves são salvas localmente em SQLite (`futanalytics.db`) e nunca saem da sua 
 2. Shrinkage bayesiano para a média da liga em amostras pequenas.
 3. Gols esperados por lado; matriz de placares Poisson com correção de Dixon-Coles.
 4. Probabilidades de Over/Under, BTTS, 1X2 e dupla chance derivadas da matriz.
-5. Melhor mercado por jogo escolhido por EV (com odds reais) ou por probabilidade calibrada.
-6. Stake por Kelly fracionado (padrão 0,25) com teto por aposta (padrão 3% da banca); múltiplas com fração reduzida.
+5. Médias de gols por liga (mando/visitante) estimadas do histórico recente, com shrinkage para a média global.
+6. Mistura modelo + consenso de mercado (probabilidade implícita nas odds, com margem removida) quando há odds reais.
+7. Melhor mercado por jogo escolhido por EV (com odds reais) ou por probabilidade calibrada.
+8. Stake por Kelly fracionado (padrão 0,25) com teto por aposta (padrão 3% da banca); múltiplas com fração reduzida.
 
 ## Estrutura
 
