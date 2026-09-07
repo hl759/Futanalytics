@@ -157,6 +157,7 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <div class="field"><label>Teto por aposta (% da banca · recomendado 2 a 3%)</label><input id="sCap" type="number" step="0.5" min="0.5" max="10"></div>
         <div class="field"><label>EV mínimo para recomendar (% · recomendado 3%)</label><input id="sEv" type="number" step="0.5"></div>
         <div class="field"><label>Probabilidade mínima por perna da múltipla (%)</label><input id="sProb" type="number" step="1" min="50" max="90"></div>
+        <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
         <button class="btn" id="saveBank">Salvar gestão</button>
       </div>
     </div>
@@ -175,6 +176,8 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <li>Gols esperados de cada lado combinando ataque próprio com defesa adversária e mando de campo.</li>
         <li>Matriz completa de placares via Poisson com correção de Dixon-Coles, que ajusta a distorção do Poisson puro em placares baixos (0x0, 1x0, 0x1, 1x1).</li>
         <li>Dessa matriz saem as probabilidades de Over/Under, ambas marcam, 1X2 e dupla chance.</li>
+        <li>As médias de gols de referência são específicas de cada liga, estimadas do histórico recente dos times da própria competição, recuando para a média global quando a amostra é pequena.</li>
+        <li>Quando há odds reais, a probabilidade final é uma mistura entre o modelo e o consenso do mercado (probabilidade implícita nas odds, com a margem das casas removida), com peso configurável em Configurações.</li>
       </ul>
       <h3>3. Por que o foco em mercados de gols</h3>
       <p>Over/Under e BTTS são os mercados mais modeláveis estatisticamente: dependem de taxas de gols, que são mais estáveis e previsíveis do que o resultado exato de um jogo, onde o empate e episódios aleatórios (expulsão, pênalti, gol contra) pesam demais. É também onde modelos de Poisson têm o histórico acadêmico mais sólido.</p>
@@ -227,6 +230,7 @@ async function loadSettings(){
   $('#sFd').value=SETTINGS.fd_token; $('#sAf').value=SETTINGS.af_key;
   $('#sBank').value=SETTINGS.bankroll; $('#sKelly').value=SETTINGS.kelly_fraction;
   $('#sCap').value=SETTINGS.stake_cap_pct; $('#sEv').value=SETTINGS.min_ev; $('#sProb').value=SETTINGS.min_prob;
+  $('#sMw').value=Math.round((SETTINGS.model_weight||0.5)*100);
 }
 $('#saveProvider').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -256,7 +260,8 @@ $('#testAf').onclick=e=>testProv('af',e.target);
 $('#saveBank').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({bankroll:+$('#sBank').value,kelly_fraction:+$('#sKelly').value,
-      stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,min_prob:+$('#sProb').value})});
+      stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,min_prob:+$('#sProb').value,
+      model_weight:Math.max(0,Math.min(1,+$('#sMw').value/100))})});
   toast('Gestão de banca salva');await loadSettings();loadDay();
 };
 
@@ -281,7 +286,7 @@ function renderFixture(fx,isBest){
     <div class="bigpick">
       <div class="lab">${isBest?'⭐ Aposta do dia':'Melhor mercado'}</div>
       <div class="val">${b.label} <span class="oddtag">@${b.odd.toFixed(2)}</span></div>
-      <div class="small">probabilidade do modelo ${pct(b.prob)} ${b.odd_is_fair?'(odd justa, sem odds de mercado)':''}</div>
+      <div class="small">${b.odd_is_fair?'probabilidade do modelo':'probabilidade (modelo + mercado)'} ${pct(b.prob)} ${b.odd_is_fair?'(odd justa, sem odds de mercado)':''}</div>
       <div class="bar"><i style="width:${(b.prob*100).toFixed(0)}%"></i></div>
       <div class="row" style="margin-top:10px">
         ${evTag}
@@ -348,6 +353,7 @@ async function loadDay(){
       const rest=DAY.fixtures.filter(f=>f.id!==DAY.best_single)
         .sort((a,b)=>((b.best?b.best.score:-9))-((a.best?a.best.score:-9)));
       if(best)html+=renderFixture(best,true);
+      else if(DAY.fixtures.length)html+=`<div class="warn">Nenhum mercado passou do EV mínimo configurado hoje. Dia sem valor é dia de apostar menos, não de forçar entrada.</div>`;
       html+=rest.map(f=>renderFixture(f,false)).join('');
     }
     $('#dayContent').innerHTML=html;
