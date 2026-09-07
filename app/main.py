@@ -14,7 +14,8 @@ from pydantic import BaseModel
 
 from . import db, provider
 from .model import (
-    MARKET_LABELS, TeamSample, analyze_match, kelly_stake, pick_best_market,
+    MARKET_LABELS, TeamSample, analyze_match, blend_markets, kelly_stake,
+    league_priors, pick_best_market,
 )
 
 app = FastAPI(title="FutAnalytics")
@@ -40,6 +41,7 @@ class Settings(BaseModel):
     stake_cap_pct: float = 3.0
     min_ev: float = 3.0               # EV mínimo (%) para recomendar aposta
     min_prob: float = 55.0            # prob mínima (%) para pernas de múltipla
+    model_weight: float = 0.5         # peso do modelo na mistura modelo+mercado (1 = só modelo)
 
 
 def load_settings() -> Settings:
@@ -81,6 +83,7 @@ class SettingsIn(BaseModel):
     stake_cap_pct: float | None = None
     min_ev: float | None = None
     min_prob: float | None = None
+    model_weight: float | None = None
 
 
 @app.post("/api/settings")
@@ -147,18 +150,25 @@ async def _team_games(s: Settings, fx: dict, side: str, day: str):
     return provider.demo_team_recent(day, team)
 
 
-async def _analyze_fixture(s: Settings, fx: dict, day: str, with_odds: bool):
+async def _team_games_for(s: Settings, fx: dict, day: str):
+    """Busca o histórico dos dois times, tratando erro por jogo."""
     try:
         hg, ag = await asyncio.gather(
             _team_games(s, fx, "home", day),
             _team_games(s, fx, "away", day),
         )
+        return hg, ag, None
     except provider.ProviderError as e:
-        return {**fx, "error": str(e)}
+        return None, None, str(e)
 
+
+async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
+                           with_odds: bool):
+    """Analisa um jogo com histórico já baixado e priores de liga específicos."""
     analysis = analyze_match(
         TeamSample(fx["home"]["name"], [tuple(g) for g in hg]),
         TeamSample(fx["away"]["name"], [tuple(g) for g in ag]),
+        home_avg=home_avg, away_avg=away_avg,
     )
 
     odds = None
@@ -171,6 +181,16 @@ async def _analyze_fixture(s: Settings, fx: dict, day: str, with_odds: bool):
                 odds = None
         elif fx["provider"] == "demo":
             odds = provider.demo_odds(fx["id"], analysis["fair_odds"])
+
+    # Mistura com o consenso do mercado (probabilidade implícita nas odds, com
+    # margem removida), preservando complementaridade (Over+Under=1, 1X2=1).
+    if odds:
+        blended = blend_markets(analysis["markets"], odds, s.model_weight)
+        analysis["model_markets"] = analysis["markets"]
+        analysis["markets"] = blended
+        analysis["fair_odds"] = {
+            k: round(1 / v, 2) if v > 0.01 else 99.0 for k, v in blended.items()
+        }
 
     best = pick_best_market(analysis, odds)
     stake = None
@@ -196,13 +216,35 @@ async def day_analysis(day: str | None = None):
     # limitar concorrência para respeitar rate limits
     sem = asyncio.Semaphore(2 if s.provider == "fd" else 5)
 
-    async def run(fx):
+    # Fase 1: baixar o histórico dos times de todos os jogos do dia.
+    async def fetch(fx):
         async with sem:
-            return await _analyze_fixture(s, fx, day, with_odds)
+            return fx, await _team_games_for(s, fx, day)
 
-    results = await asyncio.gather(*[run(fx) for fx in fixtures])
-    analyzed = [r for r in results if "analysis" in r]
-    errors = [r for r in results if "error" in r]
+    fetched = await asyncio.gather(*[fetch(fx) for fx in fixtures])
+
+    # Médias de gols por liga (mando/visitante) a partir do histórico do dia,
+    # com shrinkage para as médias globais quando a amostra é pequena.
+    pool: dict[str, list] = {}
+    errors: list = []
+    ready: list = []
+    for fx, (hg, ag, err) in fetched:
+        if err:
+            errors.append({**fx, "error": err})
+            continue
+        pool.setdefault(fx["league"], [])
+        pool[fx["league"]].extend(hg)
+        pool[fx["league"]].extend(ag)
+        ready.append((fx, hg, ag))
+    priors = {lg: league_priors(games) for lg, games in pool.items()}
+
+    # Fase 2: analisar cada jogo (odds, mistura com o mercado, melhor mercado).
+    async def finish(fx, hg, ag):
+        async with sem:
+            home_avg, away_avg = priors[fx["league"]]
+            return await _analyze_fixture(s, fx, hg, ag, home_avg, away_avg, with_odds)
+
+    analyzed = await asyncio.gather(*[finish(fx, hg, ag) for fx, hg, ag in ready])
 
     # ranking do dia: score = prob*confiança (+EV quando há odds)
     ranked = sorted(
@@ -217,8 +259,6 @@ async def day_analysis(day: str | None = None):
             continue
         best_single = r
         break
-    if best_single is None and ranked:
-        best_single = ranked[0]
 
     # múltipla: 2 a 4 pernas com prob >= min_prob, jogos distintos, maior score
     legs = []
