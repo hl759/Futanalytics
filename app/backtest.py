@@ -223,7 +223,8 @@ def team_games(hist, team, today, n=40, use_xg=True):
 
 def run(matches: list[dict], mode: str = "xg", xg_weight: float | None = None,
         calibrators: dict | None = None, model_weight: float = 0.25,
-        min_ev: float = 0.03, kelly_uncertainty: bool = True) -> list[dict]:
+        min_ev: float = 0.03, kelly_uncertainty: bool = True,
+        pick_mode: str = "prob") -> list[dict]:
     """Roda o pipeline do app sobre as partidas. mode: 'xg' | 'goals'."""
     if mode == "goals":
         xg_weight = 0.0
@@ -249,7 +250,7 @@ def run(matches: list[dict], mode: str = "xg", xg_weight: float | None = None,
         if m["odds"]:
             res["markets"] = blend_markets(res["markets"], m["odds"], model_weight)
 
-        best = pick_best_market(res, m["odds"])
+        best = pick_best_market(res, m["odds"], mode=pick_mode)
         results.append({
             **m, "raw": raw_markets, "cal_probs": cal_markets, "probs": res["markets"],
             "n_eff": (res["sample_home"] + res["sample_away"]) / 2,
@@ -292,10 +293,16 @@ def outcome(r, market):
         return 1.0 if r["hg"] + r["ag"] <= 2 else 0.0
     if market == "over_1.5":
         return 1.0 if r["hg"] + r["ag"] >= 2 else 0.0
+    if market == "under_1.5":
+        return 1.0 if r["hg"] + r["ag"] <= 1 else 0.0
     if market == "over_3.5":
         return 1.0 if r["hg"] + r["ag"] >= 4 else 0.0
+    if market == "under_3.5":
+        return 1.0 if r["hg"] + r["ag"] <= 3 else 0.0
     if market == "btts_yes":
         return 1.0 if r["hg"] > 0 and r["ag"] > 0 else 0.0
+    if market == "btts_no":
+        return 1.0 if r["hg"] == 0 or r["ag"] == 0 else 0.0
     raise ValueError(market)
 
 
@@ -465,6 +472,54 @@ def fit_calibration(results: list[dict], mode: str) -> dict:
     return cal
 
 
+def prob_block(results: list[dict]) -> str:
+    """v2.1: mede a dinâmica 'linha mais segura de gols por jogo'.
+
+    Relata acerto por perna (prometido vs real — teste de calibração),
+    composição das escolhas e win rate das múltiplas de 3 e 4 pernas do dia.
+    """
+    from collections import defaultdict as _dd
+    legs = [r for r in results if r["best"] is not None]
+    if not legs:
+        return "### Dinâmica 'mais provável'\n\nNenhuma perna elegível.\n"
+    lines = ["### Dinâmica v2.1 — 'linha mais segura de gols por jogo'", ""]
+    n = len(legs)
+    hit = sum(outcome(r, r["best"]["market"]) for r in legs)
+    avg_p = sum(r["best"]["prob"] for r in legs) / n
+    lines.append(f"**{n} pernas** · acerto real **{100 * hit / n:.1f}%** · "
+                 f"prob média prometida {100 * avg_p:.1f}% (desvio {100 * (hit / n - avg_p):+.1f} p.p.)")
+    lines.append("")
+    lines.append("| Mercado | Pernas | Acerto |")
+    lines.append("|---|---|---|")
+    by_mk = _dd(lambda: [0, 0])
+    for r in legs:
+        mk = r["best"]["market"]
+        by_mk[mk][0] += 1
+        by_mk[mk][1] += outcome(r, mk)
+    for mk, (k, w) in sorted(by_mk.items(), key=lambda kv: -kv[1][0]):
+        lines.append(f"| {mk} | {k} | {100 * w / k:.1f}% |")
+    by_date = _dd(list)
+    for r in legs:
+        by_date[r["date"]].append(r)
+    tot4 = win4 = tot3 = win3 = 0
+    for _d, rs in by_date.items():
+        rs = sorted(rs, key=lambda r: -r["best"]["prob"])
+        if len(rs) >= 4:
+            tot4 += 1
+            if all(outcome(r, r["best"]["market"]) for r in rs[:4]):
+                win4 += 1
+        l3 = rs[:3]
+        if len(l3) == 3:
+            tot3 += 1
+            if all(outcome(r, r["best"]["market"]) for r in l3):
+                win3 += 1
+    lines.append("")
+    lines.append(f"**Múltipla do dia (até 4 pernas):** {tot4} dias · green total **{100 * win4 / max(tot4, 1):.1f}%** · "
+                 f"3 pernas: **{100 * win3 / max(tot3, 1):.1f}%** ({tot3} dias)")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 # ------------------------------------------------------------------ CLI
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Backtest FutAnalytics")
@@ -522,7 +577,8 @@ def main(argv=None):
         if "calibração" in label:
             cals = all_cal.get(mode) or calib.load_all().get(mode)
         res_test = run(test_matches, mode=mode, xg_weight=xgw, calibrators=cals,
-                       model_weight=args.model_weight, min_ev=args.min_ev)
+                       model_weight=args.model_weight, min_ev=args.min_ev,
+                       pick_mode="prob")
         n_eval = len(res_test)
         print(f"\n== {label} ==  ({n_eval} jogos avaliáveis no teste)")
         sec = [f"## {label}", "", f"*{n_eval} jogos avaliáveis (histórico ≥ {MIN_HIST} jogos)*", ""]
@@ -530,12 +586,10 @@ def main(argv=None):
         sec.append(strategy_block(res_test, args.model_weight, args.min_ev))
         sections.append("\n".join(sec))
 
-    # seção extra: produção v2 com min_ev 1% (mais volume, ainda disciplinado)
-    cals = all_cal.get("xg") or calib.load_all().get("xg")
-    res_lo = run(test_matches, mode="xg", xg_weight=PARAMS["XG_WEIGHT"], calibrators=cals,
-                 model_weight=args.model_weight, min_ev=0.01)
-    sec = ["## v2 completa · produção com min_ev 1% (mais volume)", ""]
-    sec.append(strategy_block(res_lo, args.model_weight, 0.01))
+    # seção extra: dinâmica v2.1 ('mais provável', só gols) — usa o último
+    # res_test do loop (v2 completa, pick_mode="prob")
+    sec = ["## v2.1 · dinâmica \'mais provável\' (só gols, produção atual)", ""]
+    sec.append(prob_block(res_test))
     sections.append("\n".join(sec))
 
     report.extend(sections)

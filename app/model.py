@@ -378,7 +378,14 @@ def blend_markets(model_markets: dict, odds: dict, model_weight: float = 0.25) -
 
 
 GOAL_MARKETS = ["over_1.5", "over_2.5", "under_2.5", "btts_yes", "btts_no", "over_3.5", "under_3.5"]
-OTHER_MARKETS = ["dc_1x", "dc_x2", "home", "away"]
+
+# v2.1: o app é de GOLS e pensa no MAIS PROVÁVEL, não no maior EV.
+# Sem over/under 0.5 (odd micro, inútil em múltipla) e sem 1X2/dupla chance.
+# A ordem abaixo é só desempate quando duas linhas têm probabilidade igual.
+GOAL_PICK_MARKETS = ["over_1.5", "over_2.5", "btts_yes", "under_2.5",
+                     "btts_no", "over_3.5", "under_3.5", "under_1.5"]
+PICK_MIN_PROB = 0.60   # abaixo disso nem é candidato
+PICK_MAX_PROB = 0.95   # acima disso a odd já não paga o risco de fila
 
 MARKET_FAMILY = {
     "over_1.5": "gols", "over_2.5": "gols", "over_3.5": "gols",
@@ -387,7 +394,9 @@ MARKET_FAMILY = {
     "home": "resultado", "draw": "resultado", "away": "resultado",
     "dc_1x": "dupla", "dc_x2": "dupla", "dc_12": "dupla",
 }
-CANDIDATE_MARKETS = list(MARKET_FAMILY.keys())
+# apenas gols/BTTS entram em candidatos e múltiplas (v2.1)
+CANDIDATE_MARKETS = ["over_1.5", "over_2.5", "under_2.5", "over_3.5", "under_3.5",
+                     "btts_yes", "btts_no", "under_1.5"]
 
 LEG_MIN_PROB = 0.40
 MAX_LEGS = 4
@@ -397,94 +406,79 @@ ANCHOR_MIN_PROB = 0.72
 
 
 def candidate_markets(analysis: dict, odds: dict | None):
+    """Ângulos candidatos de um jogo, do MAIS PROVÁVEL para o menos provável.
+
+    v2.1: apenas mercados de gols e BTTS; probabilidade manda, EV é informativo.
+    """
     probs = analysis["markets"]
     odds = odds or {}
     out = []
     for mk in CANDIDATE_MARKETS:
         p = probs.get(mk)
-        if p is None or p < LEG_MIN_PROB:
+        if p is None:
             continue
-        odd = odds.get(mk)
-        if odd:
-            ev = p * odd - 1
-            score = ev
-        else:
-            odd = 1.0 / p
-            ev = None
-            score = (p - 0.5) * analysis.get("confidence", 0.5)
+        odd = odds.get(mk) or round(1.0 / p, 2)
+        ev = round(p * odds[mk] - 1, 4) if odds.get(mk) else None
         out.append({
             "market": mk, "label": MARKET_LABELS[mk],
             "prob": round(p, 4), "odd": round(odd, 2),
-            "ev": round(ev, 4) if ev is not None else None,
-            "score": round(score, 4), "family": MARKET_FAMILY[mk],
+            "ev": ev,
+            "score": round(p, 4),
+            "family": MARKET_FAMILY[mk],
         })
-    out.sort(key=lambda c: -c["score"])
-    return out
+    # mais provável primeiro; desempate pela ordem de preferência (over primeiro)
+    pref = {mk: i for i, mk in enumerate(GOAL_PICK_MARKETS)}
+    out.sort(key=lambda c: (-c["prob"], pref.get(c["market"], 99)))
+    return [c for c in out if c["prob"] >= 0.40]
 
 
 def build_multiple(analyzed: list, settings) -> dict | None:
+    """Múltipla do dia no estilo 'linha mais segura de cada jogo' (v2.1).
+
+    Uma perna por jogo = o mercado de gols MAIS PROVÁVEL daquele jogo
+    (pode repetir: se Over 1.5 é o mais seguro em todos, a múltipla é
+    toda de Over 1.5 — exatamente a dinâmica clássica). Pernas ordenadas
+    pela probabilidade, até MAX_LEGS, cada uma acima de PICK_MIN_PROB.
+    """
     per_match = []
     for r in analyzed:
-        cands = candidate_markets(r["analysis"], r.get("odds"))
+        cands = [c for c in candidate_markets(r["analysis"], r.get("odds"))
+                 if c["prob"] >= PICK_MIN_PROB]
         if cands:
-            per_match.append((r, cands))
-    per_match.sort(key=lambda rc: -rc[1][0]["score"])
+            per_match.append((r, cands[0]))
+    per_match.sort(key=lambda rc: -rc[1]["prob"])
 
     legs = []
-    fam_count: dict[str, int] = {}
-    used_markets: set = set()
-    anchors = 0
-    for r, cands in per_match:
+    for r, c in per_match:
         if len(legs) >= MAX_LEGS:
             break
-        chosen = None
-        for c in cands:
-            if c["market"] in used_markets:
-                continue
-            if fam_count.get(c["family"], 0) >= MAX_PER_FAMILY:
-                continue
-            if c["odd"] < ANCHOR_ODD:
-                if anchors >= 1 or c["prob"] < ANCHOR_MIN_PROB:
-                    continue
-            chosen = c
-            break
-        if chosen:
-            legs.append({
-                "fixture_id": r["id"],
-                "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
-                "league": r["league"],
-                "kickoff_utc": r["kickoff_utc"],
-                "market": chosen["market"],
-                "label": chosen["label"],
-                "prob": chosen["prob"],
-                "odd": chosen["odd"],
-                "ev": chosen["ev"],
-                "anchor": chosen["odd"] < ANCHOR_ODD,
-                "_n_eff": r["analysis"].get("n_eff", 12.0),
-            })
-            fam_count[chosen["family"]] = fam_count.get(chosen["family"], 0) + 1
-            used_markets.add(chosen["market"])
-            if legs[-1]["anchor"]:
-                anchors += 1
+        legs.append({
+            "fixture_id": r["id"],
+            "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
+            "league": r["league"],
+            "kickoff_utc": r["kickoff_utc"],
+            "market": c["market"],
+            "label": c["label"],
+            "prob": c["prob"],
+            "odd": c["odd"],
+            "ev": c["ev"],
+            "anchor": c["odd"] < ANCHOR_ODD,
+            "_n_eff": r["analysis"].get("n_eff", 12.0),
+        })
 
     if len(legs) < 2:
         return None
 
     comb_odd = 1.0
     comb_prob = 1.0
-    min_n_eff = 999.0
     for l in legs:
         comb_odd *= l["odd"]
         comb_prob *= l["prob"]
-        min_n_eff = min(min_n_eff, l.get("_n_eff", 12.0))
 
     real = all(l["ev"] is not None for l in legs)
     ev = round(comb_prob * comb_odd - 1, 4) if real else None
-    stake = kelly_stake(comb_prob, comb_odd, settings.bankroll,
-                        settings.kelly_fraction * 0.6,
-                        settings.stake_cap_pct / 100 * 0.5,
-                        n_eff=min_n_eff,
-                        uncertainty=getattr(settings, "kelly_uncertainty", True)) if real else None
+    # stake FIXA sugerida: Kelly não se aplica ao modo acerto (sem edge medido)
+    stake = flat_stake(settings.bankroll, settings.stake_cap_pct, fraction=0.5)
 
     return {
         "legs": legs,
@@ -495,32 +489,32 @@ def build_multiple(analyzed: list, settings) -> dict | None:
     }
 
 
-def pick_best_market(analysis: dict, odds: dict | None):
+def pick_best_market(analysis: dict, odds: dict | None, mode: str = "prob"):
     """
-    Escolhe o melhor mercado do jogo.
-    Com odds reais: maior EV positivo (prioridade a mercados de gols).
-    Sem odds: mercado de gols com prob entre 0.60 e 0.90 mais distante do coin flip.
+    v2.1 — seleção SOMENTE entre mercados de gols/BTTS.
+    mode="prob" (padrão): o mais provável de acontecer dentro da janela
+    [PICK_MIN_PROB, PICK_MAX_PROB]; odds só aparecem como informação.
+    mode="ev": mesma lista de gols, ordenada por valor esperado.
     """
     probs = analysis["markets"]
+    odds = odds or {}
     candidates = []
-    for mk in GOAL_MARKETS + OTHER_MARKETS:
+    for pref_i, mk in enumerate(GOAL_PICK_MARKETS):
         p = probs.get(mk, 0)
-        if not (0.52 <= p <= 0.92):
+        if not (PICK_MIN_PROB <= p <= PICK_MAX_PROB):
             continue
-        goal_bonus = 0.03 if mk in GOAL_MARKETS else 0.0
-        odd = (odds or {}).get(mk)
-        if odd:
-            ev = p * odd - 1
-            score = ev + goal_bonus
-            candidates.append((score, mk, p, odd, ev))
+        odd = odds.get(mk)
+        ev = p * odd - 1 if odd else None
+        show_odd = odd or 1 / p
+        if mode == "ev":
+            score = ev if ev is not None else -9.0
         else:
-            fair = 1 / p
-            score = (p - 0.5) * analysis["confidence"] + goal_bonus
-            candidates.append((score, mk, p, fair, None))
+            score = p
+        candidates.append((score, -pref_i, mk, p, show_odd, ev))
     if not candidates:
         return None
-    candidates.sort(key=lambda t: -t[0])
-    score, mk, p, odd, ev = candidates[0]
+    candidates.sort(key=lambda t: (-t[0], t[1]))
+    score, _pi, mk, p, odd, ev = candidates[0]
     return {
         "market": mk,
         "label": MARKET_LABELS[mk],
@@ -530,6 +524,14 @@ def pick_best_market(analysis: dict, odds: dict | None):
         "ev": round(ev, 4) if ev is not None else None,
         "score": round(score, 4),
     }
+
+
+def flat_stake(bankroll: float, cap_pct: float = 3.0, fraction: float = 0.5) -> dict:
+    """Stake fixa sugerida para o modo 'mais provável' (sem edge medido,
+    Kelly não se aplica): fração do teto por aposta. Padrão: 1,5% da banca."""
+    pct = round(cap_pct * fraction, 2)
+    return {"stake": round(bankroll * pct / 100, 2), "kelly_full": None,
+            "pct": pct, "sigma": None}
 
 
 def kelly_stake(prob: float, odd: float, bankroll: float,

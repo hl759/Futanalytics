@@ -26,13 +26,13 @@ from pydantic import BaseModel
 from . import calibration, db, provider, understat
 from .model import (
     MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
-    kelly_stake, league_priors, league_xg_priors, pick_best_market,
+    flat_stake, kelly_stake, league_priors, league_xg_priors, pick_best_market,
 )
 
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -51,6 +51,7 @@ class Settings(BaseModel):
     use_calibration: bool = True      # aplicar curvas isotônicas treinadas
     kelly_uncertainty: bool = True    # Kelly desconta incerteza da amostra
     shadow_mode: bool = False         # registrar toda recomendação como bilhete-sombra
+    pick_mode: str = "prob"           # v2.1: "prob" = mais provável (gols) | "ev" = valor esperado
 
 
 def load_settings() -> Settings:
@@ -185,6 +186,7 @@ class SettingsIn(BaseModel):
     use_calibration: bool | None = None
     kelly_uncertainty: bool | None = None
     shadow_mode: bool | None = None
+    pick_mode: str | None = None
 
 
 @app.post("/api/settings")
@@ -334,15 +336,19 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
             k: round(1 / v, 2) if v > 0.01 else 99.0 for k, v in blended.items()
         }
 
-    best = pick_best_market(analysis, odds)
+    best = pick_best_market(analysis, odds, mode=s.pick_mode)
     n_eff = (analysis["sample_home"] + analysis["sample_away"]) / 2
     stake = None
     if best:
-        stake = kelly_stake(
-            best["prob"], best["odd"], s.bankroll,
-            s.kelly_fraction, s.stake_cap_pct / 100,
-            n_eff=n_eff, uncertainty=s.kelly_uncertainty,
-        )
+        if s.pick_mode == "ev":
+            stake = kelly_stake(
+                best["prob"], best["odd"], s.bankroll,
+                s.kelly_fraction, s.stake_cap_pct / 100,
+                n_eff=n_eff, uncertainty=s.kelly_uncertainty,
+            )
+        else:
+            # modo "mais provável": stake fixa sugerida (1,5% da banca)
+            stake = flat_stake(s.bankroll, s.stake_cap_pct, fraction=0.5)
 
     analysis["n_eff"] = round(n_eff, 1)
     return {**fx, "analysis": analysis, "odds": odds, "best": best, "stake": stake}
@@ -402,7 +408,7 @@ async def day_analysis(day: str | None = None):
     best_single = None
     for r in ranked:
         b = r["best"]
-        if b["ev"] is not None and b["ev"] * 100 < s.min_ev:
+        if s.pick_mode == "ev" and b["ev"] is not None and b["ev"] * 100 < s.min_ev:
             continue
         best_single = r
         break
