@@ -339,9 +339,24 @@ function renderMultiple(m){
 async function loadDay(){
   const day=$('#dayPick').value||new Date().toISOString().slice(0,10);
   $('#dayContent').innerHTML='<div class="loading"><div class="spin"></div><br>Analisando jogos do dia...<br><span class="small">Na primeira carga do dia com a football-data.org isso pode levar alguns minutos: a API gratuita limita 10 consultas por minuto e cada time exige uma consulta de histórico. Depois fica em cache e abre na hora.</span></div>';
-  try{
-    DAY=await api('/api/day?day='+day);
-    $('#provTag').textContent={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'';
+  let attempt=0;
+  while(true){
+    try{
+      DAY=await api('/api/day?day='+day);
+      break;
+    }catch(e){
+      const gw=/erro 502|erro 503|erro 504|Bad Gateway|Service Unavailable|Gateway Timeout/i.test(e.message);
+      if(gw && attempt<10){
+        attempt++;
+        $('#dayContent').innerHTML=`<div class="loading"><div class="spin"></div><br>O servidor gratuito (Render) está aquecendo e cortou a análise no meio.<br><span class="small">Tentativa ${attempt}/10 automática em 15s. Cada tentativa aproveita o que já foi baixado; em 1 a 3 minutos o painel abre sozinho.</span></div>`;
+        await new Promise(r=>setTimeout(r,15000));
+        continue;
+      }
+      $('#dayContent').innerHTML=`<div class="warn">Erro ao carregar: ${e.message}</div>`;
+      return;
+    }
+  }
+  $('#provTag').textContent={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'';
     let html='';
     if(DAY.provider==='demo')html+=`<div class="warn">Você está no modo demonstração com dados simulados. Configure uma chave gratuita em Configurações para analisar jogos reais do dia.</div>`;
     if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;
@@ -356,9 +371,6 @@ async function loadDay(){
       html+=rest.map(f=>renderFixture(f,false)).join('');
     }
     $('#dayContent').innerHTML=html;
-  }catch(e){
-    $('#dayContent').innerHTML=`<div class="warn">Erro ao carregar: ${e.message}</div>`;
-  }
 }
 $('#reload').onclick=loadDay;
 $('#dayPick').onchange=loadDay;
