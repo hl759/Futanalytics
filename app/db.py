@@ -48,6 +48,18 @@ def init():
             );
             """
         )
+        _migrate(c)
+
+
+def _migrate(c):
+    """Migrações leves: adiciona colunas novas preservando dados antigos."""
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(bets)").fetchall()}
+    if "shadow" not in cols:
+        c.execute("ALTER TABLE bets ADD COLUMN shadow INTEGER DEFAULT 0")
+    if "closing_odd" not in cols:
+        c.execute("ALTER TABLE bets ADD COLUMN closing_odd REAL")
+    if "clv" not in cols:
+        c.execute("ALTER TABLE bets ADD COLUMN clv REAL")
 
 
 def get_setting(key: str, default=None):
