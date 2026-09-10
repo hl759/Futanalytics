@@ -156,8 +156,24 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <div class="field"><label>Fração de Kelly (0.1 a 0.5 · recomendado 0.25)</label><input id="sKelly" type="number" step="0.05" min="0.05" max="1"></div>
         <div class="field"><label>Teto por aposta (% da banca · recomendado 2 a 3%)</label><input id="sCap" type="number" step="0.5" min="0.5" max="10"></div>
         <div class="field"><label>EV mínimo para recomendar (% · recomendado 3%)</label><input id="sEv" type="number" step="0.5"></div>
-        <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
+        <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado · recomendado 25%)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
+        <div class="field"><label>Peso do xG sobre gols brutos (% · recomendado 65%; ligas sem xG usam gols + calibração)</label><input id="sXg" type="number" step="5" min="0" max="100"></div>
+        <div class="field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="sCal" style="width:auto"> Calibrar probabilidades (curvas treinadas em temporadas passadas)</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sKellyUnc" style="width:auto"> Kelly com desconto de incerteza (stake menor quando a amostra é curta)</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sShadow" style="width:auto"> Modo sombra (registra toda recomendação como bilhete de auditoria, sem tocar a banca)</label>
+        </div>
         <button class="btn" id="saveBank">Salvar gestão</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3 style="margin-bottom:8px">Backup e restauração</h3>
+      <div class="small" style="margin-bottom:12px">O Render free apaga o disco a cada deploy: <b>baixe um backup antes de atualizar o código</b> e restaure depois. O arquivo inclui banca, bilhetes, CLV, modo sombra e configurações — inclusive suas chaves de API, então guarde-o com cuidado. (No seu computador o banco é local e nada se perde; isso é para quem usa via Render.)</div>
+      <div class="row" style="gap:10px">
+        <button class="btn" id="btnBackup">⬇ Baixar backup</button>
+        <button class="btn ghost" id="btnRestore">⬆ Restaurar de um arquivo…</button>
+        <input type="file" id="fileRestore" accept=".json,application/json" style="display:none">
+        <span class="small" id="restoreInfo"></span>
       </div>
     </div>
   </section>
@@ -194,6 +210,16 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
       <p>Escalações e desfalques do dia, times poupando para outra competição, condições de clima e gramado, motivação em fim de campeonato, mudança recente de treinador. Um filtro humano de 5 minutos por jogo em cima da sugestão do modelo aumenta materialmente a qualidade das entradas.</p>
       <h3>7. Expectativa honesta</h3>
       <p>Apostador vencedor de longo prazo trabalha com ROI entre 2% e 8% ao ano sobre o volume apostado, com meses negativos no caminho. Qualquer promessa acima disso é marketing. Esta plataforma existe para encontrar valor e impor disciplina, não para garantir green diário; esse produto não existe.</p>
+      <h3>8. Motor v2 — o que mudou e o que o backtest mostrou</h3>
+      <p>A versão 2 nasceu de um backtest em ~5.200 jogos reais (5 ligas, 3 temporadas, odds de fechamento) que expôs as fraquezas da v1 e validou cada correção. As quatro mudanças:</p>
+      <ul>
+        <li><b>Dois horizontes de força</b>: força estrutural (janela longa, meia-vida ~58 dias) + forma recente (últimos jogos, peso de apenas 25%). A v1 usava um decaimento único tão rápido que a amostra efetiva tinha ~4 jogos: o ruído dominava.</li>
+        <li><b>xG do Understat</b> nas ligas cobertas (top 5 Europa): qualidade das chances em vez de gols brutos, que confundem sorte com nível. No Brasileirão (sem xG público), o motor usa gols com os demais ganhos da v2.</li>
+        <li><b>Calibração isotônica</b>: as probabilidades do modelo são corrigidas por curvas treinadas em temporadas passadas antes de virar EV. Na faixa onde estão 92% dos jogos, o desvio entre probabilidade prevista e frequência real caiu de ~8 pontos para ~1-2 pontos.</li>
+        <li><b>Kelly com desconto de incerteza</b>: a stake usa a probabilidade descontada do erro amostral — amostra curta empurra a stake para baixo automaticamente.</li>
+      </ul>
+      <p><b>Resultado honesto do backtest (temporada 2025/26 como teste):</b> o modelo calibrado parou de fabricar falso valor — com peso de mercado 25% e EV mínimo de 3%, a produção passou a recomendar pouquíssimas apostas, o que é o comportamento correto quando não há edge claro. Os picks só-modelo ainda perdem para o mercado no agregado. A conclusão operacional: use o painel como filtro de disciplina e registro (modo sombra + CLV), teste em paralelo 300+ apostas e só considere dinheiro real com CLV positivo consistente.</p>
+      <p><b>Como validar você mesmo:</b> <code>python -m app.backtest --fit-calibration --report backtest_report.md</code> regenera todo o relatório (Brier/LogLoss vs. mercado, calibração, teste de alfa, ROI e CLV das estratégias).</p>
     </div>
   </section>
 </main>
@@ -229,7 +255,11 @@ async function loadSettings(){
   $('#sFd').value=SETTINGS.fd_token; $('#sAf').value=SETTINGS.af_key;
   $('#sBank').value=SETTINGS.bankroll; $('#sKelly').value=SETTINGS.kelly_fraction;
   $('#sCap').value=SETTINGS.stake_cap_pct; $('#sEv').value=SETTINGS.min_ev;
-  $('#sMw').value=Math.round((SETTINGS.model_weight||0.5)*100);
+  $('#sMw').value=Math.round((SETTINGS.model_weight||0.25)*100);
+  $('#sXg').value=Math.round((SETTINGS.xg_weight??0.65)*100);
+  $('#sCal').checked=SETTINGS.use_calibration!==false;
+  $('#sKellyUnc').checked=SETTINGS.kelly_uncertainty!==false;
+  $('#sShadow').checked=!!SETTINGS.shadow_mode;
 }
 $('#saveProvider').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -260,8 +290,57 @@ $('#saveBank').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({bankroll:+$('#sBank').value,kelly_fraction:+$('#sKelly').value,
       stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,
-      model_weight:Math.max(0,Math.min(1,+$('#sMw').value/100))})});
+      model_weight:Math.max(0,Math.min(1,+$('#sMw').value/100)),
+      xg_weight:Math.max(0,Math.min(1,+$('#sXg').value/100)),
+      use_calibration:$('#sCal').checked,
+      kelly_uncertainty:$('#sKellyUnc').checked,
+      shadow_mode:$('#sShadow').checked})});
   toast('Gestão de banca salva');await loadSettings();loadDay();
+};
+
+// ---- backup / restauração ----
+$('#btnBackup').onclick=async()=>{
+  try{
+    const r=await api('/api/backup');
+    const blob=new Blob([JSON.stringify(r,null,1)],{type:'application/json'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='futanalytics-backup-'+new Date().toISOString().slice(0,10)+'.json';
+    document.body.appendChild(a);a.click();a.remove();
+    URL.revokeObjectURL(a.href);
+    toast(`Backup baixado (${r.bets.length} bilhetes)`);
+  }catch(e){toast('Erro no backup: '+e.message);}
+};
+let restoreArmed=false;
+$('#btnRestore').onclick=()=>{
+  if(!restoreArmed){
+    restoreArmed=true;
+    $('#btnRestore').textContent='⚠ Confirmar restauração (substitui tudo)';
+    $('#btnRestore').classList.add('red');
+    $('#restoreInfo').textContent='Escolha o arquivo na próxima janela. Isto substitui bilhetes e configurações atuais.';
+    setTimeout(()=>{restoreArmed=false;$('#btnRestore').textContent='⬆ Restaurar de um arquivo…';$('#btnRestore').classList.remove('red');},6000);
+    return;
+  }
+  restoreArmed=false;
+  $('#btnRestore').textContent='⬆ Restaurar de um arquivo…';$('#btnRestore').classList.remove('red');
+  $('#fileRestore').click();
+};
+$('#fileRestore').onchange=async(e)=>{
+  const f=e.target.files[0];e.target.value='';
+  if(!f)return;
+  $('#restoreInfo').textContent='Restaurando…';
+  try{
+    const data=JSON.parse(await f.text());
+    const r=await api('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    $('#restoreInfo').textContent='';
+    toast(`Backup restaurado: ${r.bets} bilhetes`);
+    await loadSettings();
+    $('#bankTop').textContent=fmt(SETTINGS.bankroll);
+    loadBets();
+  }catch(err){
+    $('#restoreInfo').textContent='';
+    toast('Erro ao restaurar: '+err.message);
+  }
 };
 
 function hhmm(iso){try{const d=new Date(iso);return d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
@@ -298,6 +377,8 @@ function renderFixture(fx,isBest){
     <div class="mhead">
       <span class="pill blue">${fx.league}</span>
       <span class="teams">${fx.home.name} <span style="color:var(--mut)">x</span> ${fx.away.name}</span>
+      ${a.xg_used?'<span class="pill green" title="Histórico calculado com gols esperados (xG) do Understat">xG</span>':''}
+      ${a.calibrated?'<span class="pill amber" title="Probabilidades corrigidas por curvas de calibração treinadas em temporadas passadas">calibrado</span>':''}
       <span class="spacer"></span>
       <span class="small">${hhmm(fx.kickoff_utc)} · confiança do modelo ${pct(a.confidence)}</span>
     </div>
@@ -400,15 +481,21 @@ async function loadBets(){
     <div class="kpi"><div class="k">Taxa de acerto</div><div class="v">${s.hit_rate===null?'—':s.hit_rate+'%'}</div></div>
     <div class="kpi"><div class="k">Volume apostado</div><div class="v">${fmt(s.staked)}</div></div>
     <div class="kpi"><div class="k">Lucro</div><div class="v ${s.profit>0?'pos':(s.profit<0?'neg':'')}">${fmt(s.profit)}</div></div>
-    <div class="kpi"><div class="k">ROI</div><div class="v ${s.roi>0?'pos':(s.roi<0?'neg':'')}">${s.roi===null?'—':s.roi+'%'}</div></div>`;
+    <div class="kpi"><div class="k">ROI</div><div class="v ${s.roi>0?'pos':(s.roi<0?'neg':'')}">${s.roi===null?'—':s.roi+'%'}</div></div>
+    <div class="kpi"><div class="k">CLV médio${s.clv_n?` (${s.clv_n})`:''}</div><div class="v ${s.clv_avg>0?'pos':(s.clv_avg<0?'neg':'')}">${s.clv_avg===null?'—':s.clv_avg+'%'}</div></div>
+    <div class="kpi"><div class="k">Bateu o fechamento</div><div class="v">${s.clv_beat_pct===null?'—':s.clv_beat_pct+'%'}</div></div>`;
   if(!d.bets.length){$('#betList').innerHTML='<div class="empty">Nenhum bilhete registrado ainda. Registre pelo Painel do dia.</div>';return;}
-  $('#betList').innerHTML=`<div style="overflow-x:auto"><table>
-    <tr><th>Data</th><th>Aposta</th><th class="num">Odd</th><th class="num">Stake</th><th>Status</th><th class="num">Lucro</th><th></th></tr>
+  $('#betList').innerHTML=`<div class="small" style="margin-bottom:10px">CLV = odd que você pegou vs. odd de FECHAMENTO. Registrá-la é a forma mais honesta de saber se o modelo acha valor de verdade: CLV positivo consistente em 300+ apostas antecipa lucro de longo prazo.</div>
+  <div style="overflow-x:auto"><table>
+    <tr><th>Data</th><th>Aposta</th><th class="num">Odd</th><th class="num">Stake</th><th class="num">Fechamento</th><th class="num">CLV</th><th>Status</th><th class="num">Lucro</th><th></th></tr>
     ${d.bets.map(b=>`<tr>
       <td class="small">${b.match_date}</td>
-      <td><b>${b.label}</b><br><span class="small">${b.selection}</span></td>
+      <td><b>${b.label}</b>${b.shadow?' <span class="pill gray">sombra</span>':''}<br><span class="small">${b.selection}</span></td>
       <td class="num">${b.odd.toFixed(2)}</td>
-      <td class="num">${fmt(b.stake)}</td>
+      <td class="num">${b.shadow?'<span class="small">—</span>':fmt(b.stake)}</td>
+      <td class="num"><input type="number" step="0.01" min="1.01" style="width:76px;padding:4px 6px;font-size:12.5px" value="${b.closing_odd||''}" id="cl-${b.id}" placeholder="odd">
+        <button class="btn sm ghost" onclick="saveClosing(${b.id})">✓</button></td>
+      <td class="num" style="color:${b.clv>0?'var(--green)':(b.clv<0?'var(--red)':'var(--mut)')}">${b.clv===null||b.clv===undefined?'—':b.clv+'%'}</td>
       <td>${b.status==='open'?`
         <button class="btn sm" onclick="settle(${b.id},'won')">Green</button>
         <button class="btn sm red" onclick="settle(${b.id},'lost')">Red</button>
@@ -419,6 +506,12 @@ async function loadBets(){
       <td><button class="btn sm ghost" onclick="delBet(${b.id})">✕</button></td>
     </tr>`).join('')}
   </table></div>`;
+}
+async function saveClosing(id){
+  const v=document.getElementById('cl-'+id).value;
+  if(!v||+v<=1){toast('Informe a odd de fechamento (maior que 1)');return;}
+  const r=await api(`/api/bets/${id}/closing`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({closing_odd:+v})});
+  toast(`CLV registrado: ${r.clv>0?'+':''}${r.clv}%`);loadBets();
 }
 async function settle(id,st){const r=await api(`/api/bets/${id}/settle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:st})});toast(st==='won'?'Green registrado, banca atualizada':'Resultado registrado');$('#bankTop').textContent=fmt(r.bankroll);loadBets();}
 async function delBet(id){await api('/api/bets/'+id,{method:'DELETE'});loadBets();}
