@@ -2,7 +2,7 @@
 
 Plataforma de análise diária de jogos de futebol com foco em mercados de gols (Over/Under e BTTS), valor esperado e gestão de banca por Kelly fracionado.
 
-**v2**: motor reconstruído a partir de backtest em ~5.200 jogos reais (5 ligas, 3 temporadas, odds de fechamento) — histórico com xG, dois horizontes de força, calibração isotônica, Kelly com desconto de incerteza, modo sombra e tracking de CLV. Detalhes e números em `backtest_report.md`.
+**v2.1 — o app pensa apenas em GOLS e escolhe o MAIS PROVÁVEL**: sem 1X2, sem dupla chance, sem EV mandar na seleção. Cada jogo contribui com sua linha de gols mais segura (Over 1.5 é o clássico) e a múltipla do dia junta as pernas mais prováveis — repetindo linha quando ela for a mais segura em vários jogos. Sob o capô, o motor v2 (backtest em ~5.200 jogos reais): xG do Understat, dois horizontes de força e calibração isotônica — na temporada 25/26 real, a dinâmica acertou 77,3% das pernas prometendo 79,3%. Detalhes em `backtest_report.md`.
 
 ## Rodar
 
@@ -43,8 +43,8 @@ Chaves são salvas localmente em SQLite (`futanalytics.db`) e nunca saem da sua 
 4. **Calibração isotônica** das probabilidades por mercado (curvas treinadas em 2023/24–2024/25, armazenadas em `app/calibration_data.json`), antes de qualquer mistura.
 5. Probabilidades de Over/Under, BTTS, 1X2 e dupla chance derivadas da matriz; médias de gols por liga com shrinkage para a média global.
 6. **Mistura com o consenso de mercado** (devig proporcional) com peso padrão 25% — o mercado manda, o modelo filtra divergências.
-7. Melhor mercado por EV (com odds reais) ou probabilidade calibrada; **modo sombra** registra toda recomendação como bilhete de auditoria.
-8. **Kelly fracionado com desconto de incerteza**: σ = √(p(1-p)/n) descontado da probabilidade antes do Kelly; fração 0,25, teto 3% da banca, fração reduzida em múltiplas.
+7. **Melhor mercado = o mais provável** (janela 60–95%, só gols/BTTS, preferência Over em empates); EV aparece como informação. Modo "valor esperado" continua disponível em Configurações para quem opera como trader. **Modo sombra** registra toda recomendação como bilhete de auditoria.
+8. **Stake**: no modo "mais provável", stake fixa sugerida (metade do teto, 1,5% da banca no padrão). No modo EV, Kelly fracionado com desconto de incerteza (σ = √(p(1-p)/n)).
 9. **CLV**: registre a odd de fechamento de cada bilhete; CLV positivo consistente (300+ apostas) é o melhor indício de edge real antes do lucro aparecer.
 
 ## Estrutura

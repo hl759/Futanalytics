@@ -38,23 +38,15 @@ Gerado em 2026-09-10 · treino ['2324', '2425'] · teste ['2526'] (E0, SP1, I1, 
 
 ### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** 1 apostas · ROI flat **-100.00%** · ROI Kelly **+0.00%**
+**PRODUÇÃO — modelo calibrado + mercado (25%):** nenhuma aposta passou o filtro de EV (disciplina: sem valor detectado, sem aposta).
+
+**SÓ MODELO — calibrado, sem mistura com mercado:** 1 apostas · ROI flat **+20.00%** · ROI Kelly **+0.60%**
 
 | Mercado | Apostas | ROI flat |
 |---|---|---|
-| over_2.5 | 1 | -100.00% |
+| over_2.5 | 1 | +20.00% |
 
-CLV vs. fechamento B365 (1 apostas): média **+12.72%** · bateu o fechamento em **100.0%**
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 44 apostas · ROI flat **-15.75%** · ROI Kelly **-7.16%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| under_2.5 | 26 | -37.08% |
-| over_2.5 | 17 | -1.71% |
-| away | 1 | +300.00% |
-
-CLV vs. fechamento B365 (44 apostas): média **+1.85%** · bateu o fechamento em **45.5%**
+CLV vs. fechamento B365 (1 apostas): média **+2.56%** · bateu o fechamento em **100.0%**
 
 **Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
 
@@ -93,23 +85,15 @@ CLV vs. fechamento B365 (44 apostas): média **+1.85%** · bateu o fechamento em
 
 ### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** 1 apostas · ROI flat **-100.00%** · ROI Kelly **+0.00%**
+**PRODUÇÃO — modelo calibrado + mercado (25%):** nenhuma aposta passou o filtro de EV (disciplina: sem valor detectado, sem aposta).
+
+**SÓ MODELO — calibrado, sem mistura com mercado:** 1 apostas · ROI flat **+20.00%** · ROI Kelly **+0.60%**
 
 | Mercado | Apostas | ROI flat |
 |---|---|---|
-| over_2.5 | 1 | -100.00% |
+| over_2.5 | 1 | +20.00% |
 
-CLV vs. fechamento B365 (1 apostas): média **+12.72%** · bateu o fechamento em **100.0%**
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 44 apostas · ROI flat **-15.75%** · ROI Kelly **-7.16%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| under_2.5 | 26 | -37.08% |
-| over_2.5 | 17 | -1.71% |
-| away | 1 | +300.00% |
-
-CLV vs. fechamento B365 (44 apostas): média **+1.85%** · bateu o fechamento em **45.5%**
+CLV vs. fechamento B365 (1 apostas): média **+2.56%** · bateu o fechamento em **100.0%**
 
 **Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
 
@@ -148,18 +132,22 @@ CLV vs. fechamento B365 (44 apostas): média **+1.85%** · bateu o fechamento em
 
 ### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** nenhuma aposta passou o filtro de EV (disciplina: sem valor detectado, sem aposta).
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 107 apostas · ROI flat **-9.39%** · ROI Kelly **-35.19%**
+**PRODUÇÃO — modelo calibrado + mercado (25%):** 2 apostas · ROI flat **+22.50%** · ROI Kelly **+0.00%**
 
 | Mercado | Apostas | ROI flat |
 |---|---|---|
-| home | 52 | -27.15% |
-| under_2.5 | 20 | -24.35% |
-| over_2.5 | 19 | +34.95% |
-| away | 16 | +14.37% |
+| over_2.5 | 2 | +22.50% |
 
-CLV vs. fechamento B365 (107 apostas): média **+1.27%** · bateu o fechamento em **43.0%**
+CLV vs. fechamento B365 (2 apostas): média **+2.51%** · bateu o fechamento em **100.0%**
+
+**SÓ MODELO — calibrado, sem mistura com mercado:** 4 apostas · ROI flat **+20.00%** · ROI Kelly **-0.29%**
+
+| Mercado | Apostas | ROI flat |
+|---|---|---|
+| over_2.5 | 2 | -37.50% |
+| under_2.5 | 2 | +77.50% |
+
+CLV vs. fechamento B365 (4 apostas): média **+6.48%** · bateu o fechamento em **100.0%**
 
 **Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
 
@@ -198,38 +186,41 @@ CLV vs. fechamento B365 (107 apostas): média **+1.27%** · bateu o fechamento e
 
 ### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** nenhuma aposta passou o filtro de EV (disciplina: sem valor detectado, sem aposta).
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 107 apostas · ROI flat **-9.39%** · ROI Kelly **-35.19%**
+**PRODUÇÃO — modelo calibrado + mercado (25%):** 2 apostas · ROI flat **+22.50%** · ROI Kelly **+0.00%**
 
 | Mercado | Apostas | ROI flat |
 |---|---|---|
-| home | 52 | -27.15% |
-| under_2.5 | 20 | -24.35% |
-| over_2.5 | 19 | +34.95% |
-| away | 16 | +14.37% |
+| over_2.5 | 2 | +22.50% |
 
-CLV vs. fechamento B365 (107 apostas): média **+1.27%** · bateu o fechamento em **43.0%**
+CLV vs. fechamento B365 (2 apostas): média **+2.51%** · bateu o fechamento em **100.0%**
+
+**SÓ MODELO — calibrado, sem mistura com mercado:** 4 apostas · ROI flat **+20.00%** · ROI Kelly **-0.29%**
+
+| Mercado | Apostas | ROI flat |
+|---|---|---|
+| over_2.5 | 2 | -37.50% |
+| under_2.5 | 2 | +77.50% |
+
+CLV vs. fechamento B365 (4 apostas): média **+6.48%** · bateu o fechamento em **100.0%**
 
 **Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
 
 
-## v2 completa · produção com min_ev 1% (mais volume)
+## v2.1 · dinâmica 'mais provável' (só gols, produção atual)
 
-### Estratégia (blend modelo 25%, min_ev 1%, Kelly c/ desconto de incerteza)
+### Dinâmica v2.1 — 'linha mais segura de gols por jogo'
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** nenhuma aposta passou o filtro de EV (disciplina: sem valor detectado, sem aposta).
+**1367 pernas** · acerto real **77.3%** · prob média prometida 79.3% (desvio -2.0 p.p.)
 
-**SÓ MODELO — calibrado, sem mistura com mercado:** 107 apostas · ROI flat **-9.39%** · ROI Kelly **-35.19%**
-
-| Mercado | Apostas | ROI flat |
+| Mercado | Pernas | Acerto |
 |---|---|---|
-| home | 52 | -27.15% |
-| under_2.5 | 20 | -24.35% |
-| over_2.5 | 19 | +34.95% |
-| away | 16 | +14.37% |
+| over_1.5 | 1091 | 77.6% |
+| under_3.5 | 266 | 75.9% |
+| over_2.5 | 4 | 100.0% |
+| under_2.5 | 3 | 100.0% |
+| btts_no | 1 | 0.0% |
+| btts_yes | 1 | 0.0% |
+| under_1.5 | 1 | 100.0% |
 
-CLV vs. fechamento B365 (107 apostas): média **+1.27%** · bateu o fechamento em **43.0%**
-
-**Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
+**Múltipla do dia (até 4 pernas):** 101 dias · green total **35.6%** · 3 pernas: **47.9%** (121 dias)
 
