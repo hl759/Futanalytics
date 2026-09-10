@@ -10,11 +10,30 @@ visualizador de arquivos). Você precisa destes arquivos:
 
 ```
 futanalytics/
-  app/            (main.py, model.py, provider.py, db.py)
+  app/            (main.py, model.py, provider.py, db.py,
+                   calibration.py, understat.py, backtest.py,
+                   calibration_data.json)   ← obrigatório: curvas de calibração
   static/         (index.html)
   requirements.txt
   render.yaml
 ```
+
+**NÃO suba** para o GitHub/Render (pesa no repositório e não serve lá):
+`futanalytics.db` (seu banco local) e `data_cache/` (cache de backtest, ~10 MB).
+
+**Novidades da v2 no deploy:**
+- `requirements.txt` NÃO mudou: zero dependência nova, o build fica igual.
+- O xG vem do Understat (grátis, sem chave, sem configuração). Nas ligas com
+  cobertura (Premier, La Liga, Serie A, Bundesliga, Ligue 1) a 1ª carga do dia
+  fica até MAIS RÁPIDA que a v1: o histórico de todos os times da liga chega em
+  1 requisição cacheada por 12h, em vez de 1 requisição por time na
+  football-data (que limita 10/min). No Brasileirão o comportamento é o mesmo
+  da v1 (o app detecta a ausência de xG e cai para o histórico normal).
+- O `app/backtest.py` é ferramenta OFFLINE para rodar no SEU computador
+  (`python -m app.backtest ...`). No Render ele não é executado pelo servidor
+  e não consome nada — é só mais um arquivo parado.
+- A calibração já vem pronta em `app/calibration_data.json` (9 KB). Você só
+  precisa regenerá-la se quiser retreinar com temporadas novas — no seu PC.
 
 ## Passo 2: subir para o GitHub
 
@@ -47,12 +66,16 @@ futanalytics/
 ## Avisos do plano gratuito do Render
 
 - O serviço "dorme" após 15 min sem uso; a primeira visita do dia demora
-  ~1 min para acordar. Depois fica rápido.
+  ~1 min para acordar. Depois fica rápido. (Isso é o Render free, não o app —
+  e acontece igual na v1 e na v2.)
 - O disco é apagado a cada deploy: as configurações voltam ao padrão e os
   bilhetes registrados são perdidos. O token não, se estiver na variável
-  FD_TOKEN. Se o histórico de bilhetes for importante para você (e para
-  medir ROI ele é), me peça que eu adiciono exportação/importação de
-  backup ou banco externo gratuito.
+  FD_TOKEN. Para o resto, use o botão "Baixar backup" em Configurações antes
+  de atualizar o código e "Restaurar" depois do deploy — o arquivo carrega
+  banca, bilhetes, CLV, modo sombra e configurações.
+- Custo da v2 comparado à v1 no free: +9 KB de arquivo estático e, no pior
+  caso (Understat fora do ar), +10 s na primeira carga antes do fallback
+  automático. Nada a mais: mesmo build, mesma RAM, mesmo cold start.
 
 ## Alternativa sem GitHub: PythonAnywhere
 
