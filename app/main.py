@@ -41,6 +41,7 @@ class Settings(BaseModel):
     stake_cap_pct: float = 3.0
     min_ev: float = 3.0               # EV mínimo (%) para recomendar aposta
     min_prob: float = 55.0            # prob mínima (%) para pernas de múltipla
+    min_leg_odd: float = 1.40         # odd mínima por perna da múltipla (barrar odds micro)
     model_weight: float = 0.5         # peso do modelo na mistura modelo+mercado (1 = só modelo)
 
 
@@ -83,6 +84,7 @@ class SettingsIn(BaseModel):
     stake_cap_pct: float | None = None
     min_ev: float | None = None
     min_prob: float | None = None
+    min_leg_odd: float | None = None
     model_weight: float | None = None
 
 
@@ -260,16 +262,23 @@ async def day_analysis(day: str | None = None):
         best_single = r
         break
 
-    # múltipla: 2 a 4 pernas com prob >= min_prob, jogos distintos, maior score
+    # múltipla: 2 a 3 pernas com prob >= min_prob, EV >= min_ev, odd >=
+    # min_leg_odd e mercados distintos entre si; jogos distintos, maior score
     legs = []
+    used_markets: set = set()
     for r in ranked:
         b = r["best"]
         if b["prob"] * 100 < s.min_prob:
             continue
-        if b["ev"] is not None and b["ev"] < 0.0:
-            continue  # perna com EV negativo destrói a múltipla no acumulado
+        if b["ev"] is not None and b["ev"] * 100 < s.min_ev:
+            continue  # perna com EV abaixo do limiar destrói a múltipla no acumulado
+        if b["odd"] < s.min_leg_odd:
+            continue  # odd micro (ex.: 1.05) é ruído, não valor
+        if b["market"] in used_markets:
+            continue  # não empilhar o mesmo mercado (ex.: quatro Over 1.5)
+        used_markets.add(b["market"])
         legs.append(r)
-        if len(legs) == 4:
+        if len(legs) == 3:
             break
     multiple = None
     if len(legs) >= 2:
