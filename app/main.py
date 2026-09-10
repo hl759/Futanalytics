@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from . import db, provider
 from .model import (
-    MARKET_LABELS, TeamSample, analyze_match, blend_markets, kelly_stake,
-    league_priors, pick_best_market,
+    MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
+    kelly_stake, league_priors, pick_best_market,
 )
 
 app = FastAPI(title="FutAnalytics")
@@ -40,8 +40,6 @@ class Settings(BaseModel):
     kelly_fraction: float = 0.25
     stake_cap_pct: float = 3.0
     min_ev: float = 3.0               # EV mínimo (%) para recomendar aposta
-    min_prob: float = 55.0            # prob mínima (%) para pernas de múltipla
-    min_leg_odd: float = 1.40         # odd mínima por perna da múltipla (barrar odds micro)
     model_weight: float = 0.5         # peso do modelo na mistura modelo+mercado (1 = só modelo)
 
 
@@ -83,8 +81,6 @@ class SettingsIn(BaseModel):
     kelly_fraction: float | None = None
     stake_cap_pct: float | None = None
     min_ev: float | None = None
-    min_prob: float | None = None
-    min_leg_odd: float | None = None
     model_weight: float | None = None
 
 
@@ -262,52 +258,9 @@ async def day_analysis(day: str | None = None):
         best_single = r
         break
 
-    # múltipla: 2 a 3 pernas com prob >= min_prob, EV >= min_ev, odd >=
-    # min_leg_odd e mercados distintos entre si; jogos distintos, maior score
-    legs = []
-    used_markets: set = set()
-    for r in ranked:
-        b = r["best"]
-        if b["prob"] * 100 < s.min_prob:
-            continue
-        if b["ev"] is not None and b["ev"] * 100 < s.min_ev:
-            continue  # perna com EV abaixo do limiar destrói a múltipla no acumulado
-        if b["odd"] < s.min_leg_odd:
-            continue  # odd micro (ex.: 1.05) é ruído, não valor
-        if b["market"] in used_markets:
-            continue  # não empilhar o mesmo mercado (ex.: quatro Over 1.5)
-        used_markets.add(b["market"])
-        legs.append(r)
-        if len(legs) == 3:
-            break
-    multiple = None
-    if len(legs) >= 2:
-        comb_odd = 1.0
-        comb_prob = 1.0
-        for r in legs:
-            comb_odd *= r["best"]["odd"]
-            comb_prob *= r["best"]["prob"]
-        mstake = kelly_stake(comb_prob, comb_odd, s.bankroll, s.kelly_fraction * 0.6,
-                             s.stake_cap_pct / 100 * 0.5)
-        multiple = {
-            "legs": [
-                {
-                    "fixture_id": r["id"],
-                    "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
-                    "league": r["league"],
-                    "kickoff_utc": r["kickoff_utc"],
-                    "market": r["best"]["market"],
-                    "label": r["best"]["label"],
-                    "prob": r["best"]["prob"],
-                    "odd": r["best"]["odd"],
-                }
-                for r in legs
-            ],
-            "combined_odd": round(comb_odd, 2),
-            "combined_prob": round(comb_prob, 4),
-            "ev": round(comb_prob * comb_odd - 1, 4),
-            "stake": mstake,
-        }
+    # múltipla: montada como um apostador montaria: melhor ângulo por jogo,
+    # mercados diversificados, até 4 pernas, no máximo 2 do mesmo tipo e 1 âncora
+    multiple = build_multiple(analyzed, s)
 
     return {
         "day": day,
