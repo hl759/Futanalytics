@@ -156,8 +156,6 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <div class="field"><label>Fração de Kelly (0.1 a 0.5 · recomendado 0.25)</label><input id="sKelly" type="number" step="0.05" min="0.05" max="1"></div>
         <div class="field"><label>Teto por aposta (% da banca · recomendado 2 a 3%)</label><input id="sCap" type="number" step="0.5" min="0.5" max="10"></div>
         <div class="field"><label>EV mínimo para recomendar (% · recomendado 3%)</label><input id="sEv" type="number" step="0.5"></div>
-        <div class="field"><label>Probabilidade mínima por perna da múltipla (%)</label><input id="sProb" type="number" step="1" min="50" max="90"></div>
-        <div class="field"><label>Odd mínima por perna da múltipla (ex.: 1.40 · barra odds micro como 1.05)</label><input id="sLegOdd" type="number" step="0.05" min="1.10" max="3"></div>
         <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
         <button class="btn" id="saveBank">Salvar gestão</button>
       </div>
@@ -189,7 +187,7 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <li>Nunca aumente a stake para "recuperar" uma perda. O modelo não sabe que você perdeu ontem, e a odd também não.</li>
         <li>Registre todas as apostas na aba Bilhetes, inclusive as ruins. ROI real só existe com registro completo.</li>
         <li>Avalie o desempenho em blocos de 100+ apostas, nunca na semana. Variância em amostra pequena engole qualquer vantagem.</li>
-        <li>Múltiplas são opcionais e mais arriscadas: a casa multiplica a margem dela a cada perna. Por isso a plataforma limita a 3 pernas, exige EV positivo em cada uma, barra odds microscópicas (abaixo da odd mínima configurada) e não repete o mesmo mercado no mesmo bilhete. Use com stake reduzida.</li>
+        <li>Múltiplas são opcionais e mais arriscadas: a casa multiplica a margem dela a cada perna. A plataforma monta a múltipla como um apostador montaria: o melhor ângulo de cada jogo, mercados variados (não empilha o mesmo tipo), no máximo 4 pernas, no máximo 2 do mesmo tipo e no máximo 1 perna-âncora de odd baixa. Use com stake reduzida.</li>
         <li>Desconfie de EV alto demais (acima de 20%): quase sempre é erro de dado (desfalque em massa, time reserva, jogo sem importância) que o modelo não enxerga. Confira a notícia antes.</li>
       </ul>
       <h3>6. O que o modelo não enxerga (e você deve conferir)</h3>
@@ -230,9 +228,8 @@ async function loadSettings(){
   $('#sProvider').value=SETTINGS.provider;
   $('#sFd').value=SETTINGS.fd_token; $('#sAf').value=SETTINGS.af_key;
   $('#sBank').value=SETTINGS.bankroll; $('#sKelly').value=SETTINGS.kelly_fraction;
-  $('#sCap').value=SETTINGS.stake_cap_pct; $('#sEv').value=SETTINGS.min_ev; $('#sProb').value=SETTINGS.min_prob;
+  $('#sCap').value=SETTINGS.stake_cap_pct; $('#sEv').value=SETTINGS.min_ev;
   $('#sMw').value=Math.round((SETTINGS.model_weight||0.5)*100);
-  $('#sLegOdd').value=SETTINGS.min_leg_odd||1.40;
 }
 $('#saveProvider').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -262,9 +259,8 @@ $('#testAf').onclick=e=>testProv('af',e.target);
 $('#saveBank').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({bankroll:+$('#sBank').value,kelly_fraction:+$('#sKelly').value,
-      stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,min_prob:+$('#sProb').value,
-      model_weight:Math.max(0,Math.min(1,+$('#sMw').value/100)),
-      min_leg_odd:+$('#sLegOdd').value})});
+      stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,
+      model_weight:Math.max(0,Math.min(1,+$('#sMw').value/100))})});
   toast('Gestão de banca salva');await loadSettings();loadDay();
 };
 
@@ -322,18 +318,18 @@ function renderFixture(fx,isBest){
 }
 
 function renderMultiple(m){
-  if(!m)return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem pernas suficientes que atendam aos critérios (probabilidade mínima, EV positivo e odd mínima por perna). Dia de poucos jogos confiáveis é dia de apostar menos, não de forçar entrada.</div></div>`;
+  if(!m)return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem jogos suficientes para montar uma múltipla com mercados variados hoje.</div></div>`;
   return `<div class="card" style="border-color:var(--amber)">
     <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3><span class="spacer"></span>
       <span class="pill amber">odd combinada ${m.combined_odd.toFixed(2)}</span>
-      <span class="pill ${m.ev>0?'green':'red'}">EV ${(m.ev*100).toFixed(1)}%</span>
+      <span class="pill ${m.ev==null?'gray':(m.ev>0?'green':'red')}">EV ${m.ev==null?'—':(m.ev*100).toFixed(1)+'%'}</span>
     </div>
     <div style="margin:10px 0">
-      ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span><span class="oddtag">@${l.odd.toFixed(2)}</span><span class="small">${pct(l.prob)}</span></div>`).join('')}
+      ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span>${l.anchor?'<span class="pill gray">âncora</span>':''}<span class="oddtag">@${l.odd.toFixed(2)}</span><span class="small">${pct(l.prob)}</span></div>`).join('')}
     </div>
     <div class="row">
       <span class="stat">Probabilidade combinada: <b>${pct(m.combined_prob)}</b></span>
-      ${m.stake&&m.stake.stake>0?`<span class="pill blue">stake sugerida ${fmt(m.stake.stake)} (${m.stake.pct}%)</span>`:'<span class="pill gray">sem stake: EV insuficiente</span>'}
+      ${m.stake&&m.stake.stake>0?`<span class="pill blue">stake sugerida ${fmt(m.stake.stake)} (${m.stake.pct}%)</span>`:'<span class="pill gray">sem odds reais para dimensionar stake</span>'}
       <span class="spacer"></span>
       <button class="btn sm" onclick="saveMultiple()">Registrar múltipla</button>
     </div>
