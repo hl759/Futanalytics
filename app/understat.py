@@ -293,3 +293,76 @@ async def team_history(league_name: str, team_name: str,
                       xgf if xgf >= 0 else None, xga if xga >= 0 else None])
     games.sort(key=lambda g: g[0])
     return games[:max_games]
+
+async def league_matches(league_name: str, seasons: int | None = None) -> list[dict] | None:
+    """Todos os jogos com resultado da liga (datas + xG), cacheados.
+
+    Base para o modelo conjunto (app/joint.py), H2H e contexto da liga.
+    """
+    slug = UNDERSTAT_LEAGUES.get(league_name)
+    if not slug:
+        return None
+    today = dt.date.today()
+    if seasons is None:
+        this = current_season(today)
+        seasons = [this] if today.month > 9 else [this, this - 1]
+    out = []
+    for s in seasons:
+        data = await _fetch_league_data(slug, s)
+        if not data:
+            continue
+        for m in data:
+            if not m["isResult"] or m["hg"] < 0:
+                continue
+            da = _days_ago(m["datetime"], today)
+            if da is None:
+                continue
+            try:
+                d = today - dt.timedelta(days=da)
+            except OverflowError:
+                continue
+            out.append({
+                "date": d, "home": m["h"], "away": m["a"],
+                "hg": m["hg"], "ag": m["ag"],
+                "xgh": m["xgh"] if m["xgh"] >= 0 else None,
+                "xga": m["xga"] if m["xga"] >= 0 else None,
+                "days_ago": da,
+            })
+    return out or None
+
+
+async def league_context(league_name: str, home: str, away: str,
+                         max_h2h: int = 6) -> dict | None:
+    """Contexto de gols da liga + H2H de gols (últimos confrontos).
+
+    Tudo derivado do cache do Understat — zero requisição extra na prática.
+    """
+    ms = await league_matches(league_name)
+    if not ms:
+        return None
+    this_season = [m for m in ms if m["days_ago"] <= 120 or True]
+    # contexto: jogos da temporada corrente (últimos ~365 dias)
+    recent = [m for m in ms if m["days_ago"] <= 365] or ms
+    n = len(recent)
+    tot = [m["hg"] + m["ag"] for m in recent]
+    env = {
+        "n_matches": n,
+        "avg_goals": round(sum(tot) / max(n, 1), 2),
+        "over25_rate": round(sum(1 for t in tot if t >= 3) / max(n, 1), 2),
+        "btts_rate": round(sum(1 for m in recent if m["hg"] > 0 and m["ag"] > 0) / max(n, 1), 2),
+    }
+    nh = normalize_name(home); na = normalize_name(away)
+    h2h = []
+    for m in sorted(ms, key=lambda x: x["days_ago"]):
+        if normalize_name(m["home"]) == nh and normalize_name(m["away"]) == na            or normalize_name(m["home"]) == na and normalize_name(m["away"]) == nh:
+            h2h.append({
+                "date": m["date"].isoformat(),
+                "home": m["home"], "away": m["away"],
+                "hg": m["hg"], "ag": m["ag"],
+                "total": m["hg"] + m["ag"],
+                "btts": m["hg"] > 0 and m["ag"] > 0,
+            })
+        if len(h2h) >= max_h2h:
+            break
+    env["h2h"] = h2h
+    return env

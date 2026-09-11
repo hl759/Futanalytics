@@ -24,7 +24,8 @@ from pathlib import Path
 CALIB_PATH = Path(__file__).resolve().parent / "calibration_data.json"
 
 # mercados calibrados diretamente; os demais saem por complemento/grupo
-DIRECT_MARKETS = ["over_2.5", "btts_yes", "home", "away", "over_1.5", "over_3.5"]
+DIRECT_MARKETS = ["over_2.5", "btts_yes", "home", "away", "over_1.5", "over_3.5",
+                  "ht_0.5", "at_0.5", "ht_1.5", "at_1.5"]
 MODES = ["xg", "goals"]
 
 
@@ -150,6 +151,12 @@ def apply_calibration(markets: dict, calibrators: dict) -> dict:
             po = min(max(c.transform(markets[mk]), 0.01), 0.99)
             out[mk] = po
             out[f"under_{line}"] = 1 - po
+
+    # totais por time (independentes entre si)
+    for mk in ("ht_0.5", "at_0.5", "ht_1.5", "at_1.5"):
+        c = calibrators.get(mk)
+        if c and mk in markets:
+            out[mk] = min(max(c.transform(markets[mk]), 0.01), 0.99)
 
     # BTTS
     c = calibrators.get("btts_yes")

@@ -251,7 +251,8 @@ def _blend_strength(st_h: Strengths, st_a: Strengths, xg_weight: float) -> tuple
 def analyze_match(home: TeamSample, away: TeamSample,
                   home_avg: float | None = None, away_avg: float | None = None,
                   xg_home_avg: float | None = None, xg_away_avg: float | None = None,
-                  xg_weight: float | None = None):
+                  xg_weight: float | None = None,
+                  lam_override: tuple | None = None):
     P = PARAMS
     xg_weight = P["XG_WEIGHT"] if xg_weight is None else xg_weight
     home_avg = home_avg if home_avg is not None else P["GLOBAL_HOME_AVG"]
@@ -259,10 +260,15 @@ def analyze_match(home: TeamSample, away: TeamSample,
 
     st_h = home.strengths(home_avg, away_avg, xg_home_avg, xg_away_avg)
     st_a = away.strengths(home_avg, away_avg, xg_home_avg, xg_away_avg)
-    ah_atk, ah_def, aw_atk, aw_def, xg_w_eff = _blend_strength(st_h, st_a, xg_weight)
 
-    lam_home = home_avg * ah_atk * aw_def
-    lam_away = away_avg * aw_atk * ah_def
+    if lam_override is not None:
+        # λ do modelo conjunto (ajustado por adversário no nível da liga)
+        lam_home, lam_away = lam_override
+        xg_w_eff = 1.0
+    else:
+        ah_atk, ah_def, aw_atk, aw_def, xg_w_eff = _blend_strength(st_h, st_a, xg_weight)
+        lam_home = home_avg * ah_atk * aw_def
+        lam_away = away_avg * aw_atk * ah_def
     lam_home = min(max(lam_home, P["LAMBDA_HOME_MIN"]), P["LAMBDA_HOME_MAX"])
     lam_away = min(max(lam_away, P["LAMBDA_AWAY_MIN"]), P["LAMBDA_AWAY_MAX"])
 
@@ -279,6 +285,23 @@ def analyze_match(home: TeamSample, away: TeamSample,
 
     p_btts = sum(m[i][j] for i in range(1, mg + 1) for j in range(1, mg + 1))
 
+    # v2.2 — análise de gols por time (totais individuais, da margem da matriz)
+    p_home_scores = 1.0 - sum(m[0][j] for j in range(mg + 1))
+    p_away_scores = 1.0 - sum(m[i][0] for i in range(mg + 1))
+    p_home_15 = sum(m[i][j] for i in range(2, mg + 1) for j in range(mg + 1))
+    p_away_15 = sum(m[i][j] for i in range(mg + 1) for j in range(2, mg + 1))
+
+    # distribuição do total de gols (0, 1, 2, ..., 6+)
+    totals_dist = {}
+    for t in range(0, 7):
+        s = 0.0
+        for i in range(mg + 1):
+            for j in range(mg + 1):
+                hit = (i + j == t) if t < 6 else (i + j >= 6)
+                if hit:
+                    s += m[i][j]
+        totals_dist[str(t)] = round(s, 4)
+
     scores = sorted(
         ((i, j, m[i][j]) for i in range(6) for j in range(6)),
         key=lambda t: -t[2],
@@ -293,6 +316,8 @@ def analyze_match(home: TeamSample, away: TeamSample,
         "under_0.5": 1 - p_over(0.5), "under_1.5": 1 - p_over(1.5),
         "under_2.5": 1 - p_over(2.5), "under_3.5": 1 - p_over(3.5),
         "btts_yes": p_btts, "btts_no": 1 - p_btts,
+        "ht_0.5": p_home_scores, "at_0.5": p_away_scores,
+        "ht_1.5": p_home_15, "at_1.5": p_away_15,
         "home": p_home, "draw": p_draw, "away": p_away,
         "dc_1x": p_home + p_draw, "dc_x2": p_draw + p_away, "dc_12": p_home + p_away,
     }
@@ -311,6 +336,30 @@ def analyze_match(home: TeamSample, away: TeamSample,
         "confidence": confidence,
         "xg_weight_eff": round(xg_w_eff, 2),
         "xg_used": xg_w_eff > 0.05,
+        "totals_dist": totals_dist,
+        "joint_model": lam_override is not None,
+        "trends_home": _goal_trends(home),
+        "trends_away": _goal_trends(away),
+    }
+
+
+def _goal_trends(ts: TeamSample) -> dict:
+    """Tendências de gols do time nos últimos 10 jogos (não ponderado)."""
+    games = sorted(ts._normalize(), key=lambda g: g[0])[:10]
+    if not games:
+        return {}
+    n = len(games)
+    tot = [g[2] + g[3] for g in games]
+    return {
+        "n": n,
+        "avg_for": round(sum(g[2] for g in games) / n, 2),
+        "avg_against": round(sum(g[3] for g in games) / n, 2),
+        "avg_total": round(sum(tot) / n, 2),
+        "over25_rate": round(sum(1 for t in tot if t >= 3) / n, 2),
+        "over15_rate": round(sum(1 for t in tot if t >= 2) / n, 2),
+        "btts_rate": round(sum(1 for g in games if g[2] > 0 and g[3] > 0) / n, 2),
+        "failed_to_score": sum(1 for g in games if g[2] == 0),
+        "clean_sheets": sum(1 for g in games if g[3] == 0),
     }
 
 
@@ -328,6 +377,10 @@ MARKET_LABELS = {
     "home": "Vitória do mandante",
     "draw": "Empate",
     "away": "Vitória do visitante",
+    "ht_0.5": "Mandante marca (0.5+)",
+    "at_0.5": "Visitante marca (0.5+)",
+    "ht_1.5": "Mandante marca 1.5+",
+    "at_1.5": "Visitante marca 1.5+",
     "dc_1x": "Dupla chance 1X",
     "dc_x2": "Dupla chance X2",
     "dc_12": "Dupla chance 12",
@@ -382,12 +435,14 @@ GOAL_MARKETS = ["over_1.5", "over_2.5", "under_2.5", "btts_yes", "btts_no", "ove
 # v2.1: o app é de GOLS e pensa no MAIS PROVÁVEL, não no maior EV.
 # Sem over/under 0.5 (odd micro, inútil em múltipla) e sem 1X2/dupla chance.
 # A ordem abaixo é só desempate quando duas linhas têm probabilidade igual.
-GOAL_PICK_MARKETS = ["over_1.5", "over_2.5", "btts_yes", "under_2.5",
+GOAL_PICK_MARKETS = ["over_1.5", "ht_0.5", "at_0.5", "over_2.5", "btts_yes",
+                     "under_2.5", "ht_1.5", "at_1.5",
                      "btts_no", "over_3.5", "under_3.5", "under_1.5"]
 PICK_MIN_PROB = 0.60   # abaixo disso nem é candidato
 PICK_MAX_PROB = 0.95   # acima disso a odd já não paga o risco de fila
 
 MARKET_FAMILY = {
+    "ht_0.5": "gols", "at_0.5": "gols", "ht_1.5": "gols", "at_1.5": "gols",
     "over_1.5": "gols", "over_2.5": "gols", "over_3.5": "gols",
     "under_1.5": "gols", "under_2.5": "gols", "under_3.5": "gols",
     "btts_yes": "btts", "btts_no": "btts",
@@ -395,8 +450,9 @@ MARKET_FAMILY = {
     "dc_1x": "dupla", "dc_x2": "dupla", "dc_12": "dupla",
 }
 # apenas gols/BTTS entram em candidatos e múltiplas (v2.1)
-CANDIDATE_MARKETS = ["over_1.5", "over_2.5", "under_2.5", "over_3.5", "under_3.5",
-                     "btts_yes", "btts_no", "under_1.5"]
+CANDIDATE_MARKETS = ["over_1.5", "ht_0.5", "at_0.5", "over_2.5", "under_2.5",
+                     "over_3.5", "under_3.5", "btts_yes", "btts_no", "under_1.5",
+                     "ht_1.5", "at_1.5"]
 
 LEG_MIN_PROB = 0.40
 MAX_LEGS = 4

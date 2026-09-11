@@ -315,6 +315,10 @@ async def af_odds(key: str, fixture_id: int):
                     elif val == "Under 3.5": mk = "under_3.5"
                 elif name == "Both Teams Score":
                     mk = {"Yes": "btts_yes", "No": "btts_no"}.get(val)
+                elif name in ("Home Over/Under", "Home Team Total"):
+                    mk = {"Over 0.5": "ht_0.5", "Over 1.5": "ht_1.5"}.get(val)
+                elif name in ("Away Over/Under", "Away Team Total"):
+                    mk = {"Over 0.5": "at_0.5", "Over 1.5": "at_1.5"}.get(val)
                 elif name == "Double Chance":
                     mk = {"Home/Draw": "dc_1x", "Draw/Away": "dc_x2", "Home/Away": "dc_12"}.get(val)
                 if mk and odd > 1.0:

@@ -34,6 +34,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from . import calibration as calib
+from . import joint
 from . import understat
 from .model import (PARAMS, TeamSample, analyze_match, blend_markets,
                     de_vig_markets, kelly_stake, league_priors, league_xg_priors,
@@ -224,11 +225,27 @@ def team_games(hist, team, today, n=40, use_xg=True):
 def run(matches: list[dict], mode: str = "xg", xg_weight: float | None = None,
         calibrators: dict | None = None, model_weight: float = 0.25,
         min_ev: float = 0.03, kelly_uncertainty: bool = True,
-        pick_mode: str = "prob") -> list[dict]:
-    """Roda o pipeline do app sobre as partidas. mode: 'xg' | 'goals'."""
+        pick_mode: str = "prob", joint_mode: bool = False) -> list[dict]:
+    """Roda o pipeline do app sobre as partidas. mode: 'xg' | 'goals'.
+
+    joint_mode=True usa o modelo conjunto por liga (app/joint.py) para os λ,
+    com ajuste por (liga, semana) usando apenas jogos anteriores — v2.2.
+    """
     if mode == "goals":
         xg_weight = 0.0
     hist = build_histories(matches)
+    joint_cache: dict = {}
+
+    def joint_for(m):
+        key = (m["league"], m["date"].toordinal() // 7)
+        if key in joint_cache:
+            return joint_cache[key]
+        cutoff = m["date"]
+        league_matches = [x for x in matches if x["league"] == m["league"]]
+        model = joint.fit_league(league_matches, cutoff, xg_preferred=True)
+        joint_cache[key] = model
+        return model
+
     results = []
     for m in matches:
         gh = team_games(hist, m["home"], m["date"])
@@ -239,9 +256,14 @@ def run(matches: list[dict], mode: str = "xg", xg_weight: float | None = None,
         home_avg, away_avg = league_priors(pool)
         xg_home_avg, xg_away_avg = league_xg_priors(pool)
 
+        lam_override = None
+        if joint_mode:
+            model = joint_for(m)
+            if model:
+                lam_override = joint.predict_lambdas(model, m["home"], m["away"])
         res = analyze_match(TeamSample(m["home"], gh), TeamSample(m["away"], ga_),
                             home_avg, away_avg, xg_home_avg, xg_away_avg,
-                            xg_weight=xg_weight)
+                            xg_weight=xg_weight, lam_override=lam_override)
         raw_markets = dict(res["markets"])
         cal_markets = dict(raw_markets)
         if calibrators:
@@ -303,6 +325,14 @@ def outcome(r, market):
         return 1.0 if r["hg"] > 0 and r["ag"] > 0 else 0.0
     if market == "btts_no":
         return 1.0 if r["hg"] == 0 or r["ag"] == 0 else 0.0
+    if market == "ht_0.5":
+        return 1.0 if r["hg"] > 0 else 0.0
+    if market == "at_0.5":
+        return 1.0 if r["ag"] > 0 else 0.0
+    if market == "ht_1.5":
+        return 1.0 if r["hg"] >= 2 else 0.0
+    if market == "at_1.5":
+        return 1.0 if r["ag"] >= 2 else 0.0
     raise ValueError(market)
 
 
@@ -554,9 +584,11 @@ def main(argv=None):
     all_cal = {}
     if args.fit_calibration:
         print("\n== Treinando calibração (temporadas de treino) ==")
-        for mode, xgw in (("xg", PARAMS["XG_WEIGHT"]), ("goals", 0.0)):
+        for mode, xgw, jm in (("xg", PARAMS["XG_WEIGHT"], False),
+                              ("goals", 0.0, False),
+                              ("joint", PARAMS["XG_WEIGHT"], True)):
             res_train = run(train_matches, mode=mode, xg_weight=xgw, calibrators=None,
-                            model_weight=args.model_weight)
+                            model_weight=args.model_weight, joint_mode=jm)
             cals = fit_calibration(res_train, mode)
             all_cal[mode] = cals
             for mk, c in cals.items():
@@ -569,16 +601,14 @@ def main(argv=None):
               f"({', '.join(args.divs)})", "",
               "---", ""]
     sections = []
-    for mode, xgw, label in (("goals", 0.0, "v1: só gols, sem calibração"),
-                             ("goals", 0.0, "v1 + calibração"),
-                             ("xg", PARAMS["XG_WEIGHT"], "v2: xG sem calibração"),
-                             ("xg", PARAMS["XG_WEIGHT"], "v2 completa: xG + calibração")):
-        cals = None
-        if "calibração" in label:
-            cals = all_cal.get(mode) or calib.load_all().get(mode)
+    plans = (("goals", 0.0, False, "v2.0: gols, estimador por time"),
+             ("xg", PARAMS["XG_WEIGHT"], False, "v2.1: xG + calibração"),
+             ("xg", PARAMS["XG_WEIGHT"], True, "v2.2: modelo conjunto por adversário + xG + calibração"))
+    for mode, xgw, jm, label in plans:
+        cals = all_cal.get(mode) or calib.load_all().get(mode)
         res_test = run(test_matches, mode=mode, xg_weight=xgw, calibrators=cals,
                        model_weight=args.model_weight, min_ev=args.min_ev,
-                       pick_mode="prob")
+                       pick_mode="prob", joint_mode=jm)
         n_eval = len(res_test)
         print(f"\n== {label} ==  ({n_eval} jogos avaliáveis no teste)")
         sec = [f"## {label}", "", f"*{n_eval} jogos avaliáveis (histórico ≥ {MIN_HIST} jogos)*", ""]
@@ -588,7 +618,7 @@ def main(argv=None):
 
     # seção extra: dinâmica v2.1 ('mais provável', só gols) — usa o último
     # res_test do loop (v2 completa, pick_mode="prob")
-    sec = ["## v2.1 · dinâmica \'mais provável\' (só gols, produção atual)", ""]
+    sec = ["## v2.2 · dinâmica \'mais provável\' (produção atual)", ""]
     sec.append(prob_block(res_test))
     sections.append("\n".join(sec))
 

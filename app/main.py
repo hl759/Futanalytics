@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import calibration, db, provider, understat
+from . import calibration, db, joint, provider, understat
 from .model import (
     MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
     flat_stake, kelly_stake, league_priors, league_xg_priors, pick_best_market,
@@ -32,7 +32,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -293,14 +293,50 @@ def _get_calibrators(mode: str) -> dict:
 
 async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
                            xg_home_avg, xg_away_avg, with_odds: bool):
-    """Analisa um jogo com histórico já baixado e priores de liga específicos."""
+    """Analisa um jogo com histórico já baixado e priores de liga específicos.
+
+    v2.2: nas ligas com xG (Understat), o λ vem do MODELO CONJUNTO por liga
+    (app/joint.py) — ajustado por adversário, sem viés de calendário. O
+    estimador por time continua como fallback e fonte de tendências.
+    """
+    ts_home = TeamSample(fx["home"]["name"], [tuple(g) for g in hg])
+    ts_away = TeamSample(fx["away"]["name"], [tuple(g) for g in ag])
+    lam_override = None
+    ctx = None
+    if s.xg_weight > 0 and fx["league"] in understat.UNDERSTAT_LEAGUES:
+        try:
+            lg_matches = await understat.league_matches(fx["league"])
+            if lg_matches and len(lg_matches) >= joint.MIN_MATCHES:
+                day = str(date.today())
+                key = f"joint:{fx['league']}:{day}"
+                model = db.cache_get(key)
+                if model is None:
+                    model = joint.fit_league(lg_matches, date.today())
+                    if model is not None:
+                        db.cache_set(key, model, 12 * 3600)
+                if model is not None:
+                    # nomes do provedor -> títulos do Understat (ex.: "Man City")
+                    titles = sorted({m["home"] for m in lg_matches} | {m["away"] for m in lg_matches})
+                    us_h = understat.match_understat_team(fx["home"]["name"], titles)
+                    us_a = understat.match_understat_team(fx["away"]["name"], titles)
+                    if us_h and us_a:
+                        lams = joint.predict_lambdas(model, us_h, us_a)
+                        if lams:
+                            lam_override = lams
+            ctx = await understat.league_context(fx["league"], fx["home"]["name"], fx["away"]["name"])
+        except Exception:
+            pass  # contexto é ganho, não dependência
+
     analysis = analyze_match(
-        TeamSample(fx["home"]["name"], [tuple(g) for g in hg]),
-        TeamSample(fx["away"]["name"], [tuple(g) for g in ag]),
+        ts_home, ts_away,
         home_avg=home_avg, away_avg=away_avg,
         xg_home_avg=xg_home_avg, xg_away_avg=xg_away_avg,
         xg_weight=s.xg_weight,
+        lam_override=lam_override,
     )
+    if ctx:
+        analysis["league_env"] = {k: v for k, v in ctx.items() if k != "h2h"}
+        analysis["h2h"] = ctx.get("h2h", [])
 
     odds = None
     if with_odds:
@@ -316,7 +352,8 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
     # v2: calibra as probabilidades do modelo ANTES de misturar com o mercado.
     # As curvas são por modo (xg/goals) porque a distribuição muda com o insumo.
     if s.use_calibration:
-        mode = "xg" if analysis.get("xg_used") else "goals"
+        mode = ("joint" if lam_override is not None
+                else ("xg" if analysis.get("xg_used") else "goals"))
         calibrated = calibration.apply_calibration(analysis["markets"], _get_calibrators(mode))
         if calibrated != analysis["markets"]:
             analysis["model_markets"] = analysis["markets"]
