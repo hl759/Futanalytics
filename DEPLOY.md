@@ -10,7 +10,7 @@ visualizador de arquivos). Você precisa destes arquivos:
 
 ```
 futanalytics/
-  app/            (main.py, model.py, provider.py, db.py,
+  app/            (main.py, model.py, provider.py, db.py, joint.py,
                    calibration.py, understat.py, backtest.py,
                    calibration_data.json)   ← obrigatório: curvas de calibração
   static/         (index.html)
