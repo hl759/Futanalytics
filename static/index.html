@@ -103,7 +103,7 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
 <main>
   <section id="tab-day">
     <h2>Painel do dia</h2>
-    <div class="sub">Apenas mercados de gols (Over/Under/BTTS). O app aponta o resultado <b>mais provável</b> de cada jogo e monta a múltipla com as linhas mais seguras do dia.</div>
+    <div class="sub">Apenas mercados de gols (Over/Under/BTTS + totais por time). Distribuição de placares, ajuste por adversário, tendências e H2H em cada card. O app aponta a linha <b>mais provável</b> de cada jogo e monta a múltipla com as mais seguras do dia.</div>
     <div class="datebar">
       <input type="date" id="dayPick">
       <button class="btn ghost" id="reload">Atualizar análise</button>
@@ -367,6 +367,36 @@ function marketRows(fx){
   }).join('');
 }
 
+
+function goalsBlock(a){
+  const dist=a.totals_dist||{}, maxP=Math.max(...Object.values(dist),0.01);
+  const order=['0','1','2','3','4','5','6+'];
+  const bars=order.map(k=>{
+    const p=dist[k]||0;
+    return `<div style="flex:1;text-align:center" title="Total ${k} gols: ${(p*100).toFixed(1)}%">
+      <div style="height:${Math.max(4,(p/maxP)*64)}px;background:linear-gradient(180deg,var(--blue),var(--green));border-radius:4px 4px 0 0;margin:0 2px"></div>
+      <div class="small" style="font-size:10px">${k}</div>
+      <div class="small" style="font-size:9.5px;color:var(--mut)">${(p*100).toFixed(0)}%</div>
+    </div>`;
+  }).join('');
+  const tt=(mk,lbl)=>a.markets[mk]!==undefined?`<span class="pill blue" title="odd justa ${(1/a.markets[mk]).toFixed(2)}">${lbl} ${pct(a.markets[mk])}</span>`:'';
+  const trend=(t,side)=>!t||!t.n?'':'<div class="stat small">Últimos '+t.n+' · '+side+': média <b>'+t.avg_for.toFixed(1)+'</b> gols feitos / <b>'+t.avg_against.toFixed(1)+'</b> sofridos · O1.5 '+pct(t.over15_rate)+' · O2.5 '+pct(t.over25_rate)+' · BTTS '+pct(t.btts_rate)+(t.failed_to_score?' · não marcou '+t.failed_to_score:'')+(t.clean_sheets?' · zerou o gol '+t.clean_sheets+'x':'')+'</div>';
+  const h2h=(a.h2h&&a.h2h.length)?'<div class="stat small" style="margin-top:6px">Confrontos recentes: '+a.h2h.map(h=>'<b>'+h.total+' gols</b> ('+h.hg+'x'+h.ag+')').join(' · ')+'</div>':'';
+  const env=a.league_env?'<div class="stat small">Liga: média <b>'+(a.league_env.avg_goals||'—')+'</b> gols/jogo · Over 2.5 em '+pct(a.league_env.over25_rate||0)+' · BTTS '+pct(a.league_env.btts_rate||0)+'</div>':'';
+  return `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">
+    <div class="small" style="margin-bottom:6px"><b>Distribuição de gols totais</b> (probabilidade por linha)</div>
+    <div style="display:flex;align-items:flex-end;height:96px">${bars}</div>
+    <div style="margin:10px 0 6px;display:flex;gap:6px;flex-wrap:wrap">
+      ${tt('ht_0.5','Casa marca 0.5+')} ${tt('at_0.5','Fora marca 0.5+')} ${tt('ht_1.5','Casa 1.5+')} ${tt('at_1.5','Fora 1.5+')}
+      ${a.joint_model?'<span class="pill amber" title="λ ajustado por adversário (modelo conjunto da liga)">ajustado p/ adversário</span>':''}
+    </div>
+    ${trend(a.trends_home,'casa')}
+    ${trend(a.trends_away,'fora')}
+    ${env}
+    ${h2h}
+  </div>`;
+}
+
 function renderFixture(fx,isBest){
   const a=fx.analysis,b=fx.best;
   const evTag=b?`<span class="pill green">prob ${pct(b.prob)}</span>${b.ev!==null?` <span class="pill ${b.ev>0?'green':'red'}" title="informativo">EV ${(b.ev*100).toFixed(1)}%</span>`:''}`:'';
@@ -398,6 +428,7 @@ function renderFixture(fx,isBest){
         <div class="stat">Forma (últimos 5): casa <b>${pct(a.form_home)}</b> · fora <b>${pct(a.form_away)}</b></div>
         <div class="stat">Placares prováveis: ${a.top_scores.map(s=>`<b>${s.score}</b> (${pct(s.prob)})`).join(' · ')}</div>
         <div class="stat small" style="margin-top:6px">Amostra: ${a.sample_home} jogos (casa) · ${a.sample_away} (fora), ponderada por recência</div>
+        ${goalsBlock(a)}
       </div>
       <div>${pick}</div>
       <div style="overflow-x:auto"><table>
