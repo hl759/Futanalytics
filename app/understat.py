@@ -74,7 +74,6 @@ _TEAM_ALIASES = {
     "leicester city": "Leicester",
     "real betis balompie": "Betis",
     "club atletico de madrid": "Atletico Madrid",
-    "atletico de madrid": "Atletico Madrid",
     "atletico madrid": "Atletico Madrid",
     "real sociedad": "Real Sociedad",
     " athletic club": "Athletic Club",
@@ -289,8 +288,9 @@ async def team_history(league_name: str, team_name: str,
         is_home = m["h"] == us_team
         gf, ga = (m["hg"], m["ag"]) if is_home else (m["ag"], m["hg"])
         xgf, xga = (m["xgh"], m["xga"]) if is_home else (m["xga"], m["xgh"])
+        opp = m["a"] if is_home else m["h"]
         games.append([da, is_home, gf, ga,
-                      xgf if xgf >= 0 else None, xga if xga >= 0 else None])
+                      xgf if xgf >= 0 else None, xga if xga >= 0 else None, opp])
     games.sort(key=lambda g: g[0])
     return games[:max_games]
 
@@ -340,7 +340,6 @@ async def league_context(league_name: str, home: str, away: str,
     ms = await league_matches(league_name)
     if not ms:
         return None
-    this_season = [m for m in ms if m["days_ago"] <= 120 or True]
     # contexto: jogos da temporada corrente (últimos ~365 dias)
     recent = [m for m in ms if m["days_ago"] <= 365] or ms
     n = len(recent)
@@ -351,10 +350,12 @@ async def league_context(league_name: str, home: str, away: str,
         "over25_rate": round(sum(1 for t in tot if t >= 3) / max(n, 1), 2),
         "btts_rate": round(sum(1 for m in recent if m["hg"] > 0 and m["ag"] > 0) / max(n, 1), 2),
     }
-    nh = normalize_name(home); na = normalize_name(away)
+    nh = normalize_name(home)
+    na = normalize_name(away)
     h2h = []
     for m in sorted(ms, key=lambda x: x["days_ago"]):
-        if normalize_name(m["home"]) == nh and normalize_name(m["away"]) == na            or normalize_name(m["home"]) == na and normalize_name(m["away"]) == nh:
+        casa, fora = normalize_name(m["home"]), normalize_name(m["away"])
+        if (casa == nh and fora == na) or (casa == na and fora == nh):
             h2h.append({
                 "date": m["date"].isoformat(),
                 "home": m["home"], "away": m["away"],

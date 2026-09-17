@@ -1,5 +1,11 @@
 # Como colocar o FutAnalytics no ar com link fixo (grátis, ~10 min)
 
+> **Antes de mais nada — leia o `AUDITORIA.md`.** O que o app faz muito bem é
+> disciplina, matemática de preço e auditoria (CLV). O que o backtest **não**
+> demonstrou é vantagem sistemática contra a linha de abertura da B365 nas
+> cinco grandes ligas. Trate este deploy como um painel de decisão e de
+> registro — não como uma máquina de imprimir dinheiro.
+
 Resultado final: um endereço permanente tipo `https://futanalytics.onrender.com`
 que você abre em qualquer celular ou computador e salva na tela inicial como app.
 
@@ -21,19 +27,30 @@ futanalytics/
 **NÃO suba** para o GitHub/Render (pesa no repositório e não serve lá):
 `futanalytics.db` (seu banco local) e `data_cache/` (cache de backtest, ~10 MB).
 
-**Novidades da v2 no deploy:**
+**Novidades da v3 no deploy:**
 - `requirements.txt` NÃO mudou: zero dependência nova, o build fica igual.
-- O xG vem do Understat (grátis, sem chave, sem configuração). Nas ligas com
-  cobertura (Premier, La Liga, Serie A, Bundesliga, Ligue 1) a 1ª carga do dia
-  fica até MAIS RÁPIDA que a v1: o histórico de todos os times da liga chega em
-  1 requisição cacheada por 12h, em vez de 1 requisição por time na
-  football-data (que limita 10/min). No Brasileirão o comportamento é o mesmo
-  da v1 (o app detecta a ausência de xG e cai para o histórico normal).
+- **Token de escrita (`APP_TOKEN`)**: o `render.yaml` já gera um. A primeira vez
+  que você abrir o app, ele pede o token (o Render mostra o valor em
+  Environment Variables); o app guarda no navegador. Sem isso, qualquer pessoa
+  com o link podia apagar seus bilhetes e ler suas configurações.
+- **Banco em disco persistente (`FUTA_DB`)**: o `render.yaml` aponta para
+  `/var/data/futanalytics.db`. Para isso valer, crie um **Disk** no Render
+  (Settings > Disks, 1 GB é o suficiente) montado em `/var/data`. Sem disco, o
+  banco é apagado a cada deploy — e o backup/restauração continua sendo o
+  caminho.
+- O xG vem do Understat (grátis, sem chave). Nas ligas com cobertura (Premier,
+  La Liga, Serie A, Bundesliga, Ligue 1) a carga inicial é rápida (1 requisição
+  cacheada por liga). Fora delas o app cai no histórico de gols brutos.
 - O `app/backtest.py` é ferramenta OFFLINE para rodar no SEU computador
-  (`python -m app.backtest ...`). No Render ele não é executado pelo servidor
-  e não consome nada — é só mais um arquivo parado.
-- A calibração já vem pronta em `app/calibration_data.json` (9 KB). Você só
-  precisa regenerá-la se quiser retreinar com temporadas novas — no seu PC.
+  (`python -m app.backtest ...`). No Render ele não roda.
+- A calibração já vem pronta em `app/calibration_data.json` (9 KB, com
+  proveniência: temporadas, ligas e data do ajuste). Regenere no seu PC quando
+  tiver temporadas novas:
+  `python -m app.backtest --train 1920 2021 2122 2223 --fit-calibration`
+- **Backtest de verdade** (não confie em opinião): este comando baixa os jogos
+  do football-data.co.uk, mede Brier/LogLoss/ROI/CLV contra o mercado e gera o
+  `backtest_report.md`. Para rodar desconectado, aponte um espelho local:
+  `FUTA_DATA_DIR=/caminho/com/csvs python -m app.backtest ...`.
 
 ## Passo 2: subir para o GitHub
 

@@ -124,13 +124,36 @@ def load_all(path: Path | None = None) -> dict:
         return {}
     out = {}
     for mode, markets in raw.items():
+        if mode.startswith("_"):        # metadados de proveniência
+            continue
         out[mode] = {mk: Calibrator.from_json(d) for mk, d in markets.items()}
     return out
 
 
-def save_all(all_cal: dict, path: Path | None = None):
+def load_meta(path: Path | None = None) -> dict:
+    """Proveniência do arquivo de calibração (temporadas usadas, data, parâmetros).
+
+    Sem isso não há como saber se as curvas estão velhas — e uma curva treinada
+    em temporada futura é vazamento de informação no backtest.
+    """
+    p = path or CALIB_PATH
+    if not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+    return raw.get("_meta", {})
+
+
+def save_all(all_cal: dict, path: Path | None = None, **meta):
+    """Grava as curvas + proveniência (``_meta``). ``meta`` aceita seasons, divs,
+    model_weight, devig, fitted_at etc. — o app exibe e o backtest audita."""
     p = path or CALIB_PATH
     raw = {mode: {mk: c.to_json() for mk, c in markets.items()} for mode, markets in all_cal.items()}
+    meta = {"fitted_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
+            **{k: v for k, v in meta.items() if v is not None}}
+    raw["_meta"] = meta
     p.write_text(json.dumps(raw, indent=1))
 
 
@@ -152,11 +175,15 @@ def apply_calibration(markets: dict, calibrators: dict) -> dict:
             out[mk] = po
             out[f"under_{line}"] = 1 - po
 
-    # totais por time (independentes entre si)
-    for mk in ("ht_0.5", "at_0.5", "ht_1.5", "at_1.5"):
+    # totais por time: calibra o "marca" e deriva o "não marca" (par soma 1)
+    for mk, under in (("ht_0.5", "under_ht_0.5"), ("at_0.5", "under_at_0.5"),
+                      ("ht_1.5", "under_ht_1.5"), ("at_1.5", "under_at_1.5")):
         c = calibrators.get(mk)
         if c and mk in markets:
-            out[mk] = min(max(c.transform(markets[mk]), 0.01), 0.99)
+            p = min(max(c.transform(markets[mk]), 0.01), 0.99)
+            out[mk] = p
+            if under in markets:
+                out[under] = 1 - p
 
     # BTTS
     c = calibrators.get("btts_yes")

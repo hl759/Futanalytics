@@ -96,7 +96,6 @@ class TeamSample:
                   away_avg: float | None = None,
                   xg_home_avg: float | None = None,
                   xg_away_avg: float | None = None) -> Strengths:
-        P = PARAMS
         home_avg = home_avg if home_avg is not None else _p("GLOBAL_HOME_AVG")
         away_avg = away_avg if away_avg is not None else _p("GLOBAL_AWAY_AVG")
         xg_home_avg = xg_home_avg if xg_home_avg is not None else _p("GLOBAL_XG_HOME")
@@ -116,9 +115,13 @@ class TeamSample:
                         continue
                     gf, ga = xgf, xga
                 if home:
-                    wh_att += w * gf; wh_def += w * ga; nh += w
+                    wh_att += w * gf
+                    wh_def += w * ga
+                    nh += w
                 else:
-                    wa_att += w * gf; wa_def += w * ga; na += w
+                    wa_att += w * gf
+                    wa_def += w * ga
+                    na += w
 
             def shrink_avg(total, n, prior):
                 return (total + prior * shrink) / (n + shrink)
@@ -175,9 +178,11 @@ def league_priors(games):
     for g in games:
         _days, is_home, gf, _ga = g[0], g[1], g[2], g[3]
         if is_home:
-            hg += gf; nh += 1
+            hg += gf
+            nh += 1
         else:
-            ag += gf; na += 1
+            ag += gf
+            na += 1
     k = _p("LEAGUE_PRIOR_STRENGTH")
     home_avg = (hg + P["GLOBAL_HOME_AVG"] * k) / (nh + k)
     away_avg = (ag + P["GLOBAL_AWAY_AVG"] * k) / (na + k)
@@ -194,9 +199,11 @@ def league_xg_priors(games):
             continue
         _days, is_home, _gf, _ga, xgf, xga = g
         if is_home:
-            hg += xgf; nh += 1
+            hg += xgf
+            nh += 1
         else:
-            ag += xga; na += 1
+            ag += xga
+            na += 1
     k = _p("LEAGUE_PRIOR_STRENGTH")
     home_avg = (hg + P["GLOBAL_XG_HOME"] * k) / (nh + k)
     away_avg = (ag + P["GLOBAL_XG_AWAY"] * k) / (na + k)
@@ -310,6 +317,14 @@ def analyze_match(home: TeamSample, away: TeamSample,
     sample_conf = min((st_h.n_eff + st_a.n_eff) / 24.0, 1.0)
     confidence = round(0.35 + 0.65 * sample_conf, 2)
 
+    # total por time: os dois lados (a v2 só expunha o "marca 0.5+", sem o
+    # "menos de", e por isso não conseguia nem calcular vantagem nesses
+    # mercados — justamente os que ela mais usava)
+    p_home_under_05 = sum(m[0][j] for j in range(mg + 1))
+    p_away_under_05 = sum(m[i][0] for i in range(mg + 1))
+    p_home_under_15 = 1.0 - p_home_15
+    p_away_under_15 = 1.0 - p_away_15
+
     markets = {
         "over_0.5": p_over(0.5), "over_1.5": p_over(1.5),
         "over_2.5": p_over(2.5), "over_3.5": p_over(3.5),
@@ -318,6 +333,8 @@ def analyze_match(home: TeamSample, away: TeamSample,
         "btts_yes": p_btts, "btts_no": 1 - p_btts,
         "ht_0.5": p_home_scores, "at_0.5": p_away_scores,
         "ht_1.5": p_home_15, "at_1.5": p_away_15,
+        "under_ht_0.5": p_home_under_05, "under_at_0.5": p_away_under_05,
+        "under_ht_1.5": p_home_under_15, "under_at_1.5": p_away_under_15,
         "home": p_home, "draw": p_draw, "away": p_away,
         "dc_1x": p_home + p_draw, "dc_x2": p_draw + p_away, "dc_12": p_home + p_away,
     }
@@ -381,10 +398,26 @@ MARKET_LABELS = {
     "at_0.5": "Visitante marca (0.5+)",
     "ht_1.5": "Mandante marca 1.5+",
     "at_1.5": "Visitante marca 1.5+",
+    "under_ht_0.5": "Mandante NÃO marca",
+    "under_at_0.5": "Visitante NÃO marca",
+    "under_ht_1.5": "Mandante até 1 gol",
+    "under_at_1.5": "Visitante até 1 gol",
     "dc_1x": "Dupla chance 1X",
     "dc_x2": "Dupla chance X2",
     "dc_12": "Dupla chance 12",
 }
+
+MARKET_FAMILY = {
+    "ht_0.5": "gols", "at_0.5": "gols", "ht_1.5": "gols", "at_1.5": "gols",
+    "under_ht_0.5": "gols", "under_at_0.5": "gols",
+    "under_ht_1.5": "gols", "under_at_1.5": "gols",
+    "over_1.5": "gols", "over_2.5": "gols", "over_3.5": "gols",
+    "under_1.5": "gols", "under_2.5": "gols", "under_3.5": "gols",
+    "btts_yes": "btts", "btts_no": "btts",
+    "home": "resultado", "draw": "resultado", "away": "resultado",
+    "dc_1x": "dupla", "dc_x2": "dupla", "dc_12": "dupla",
+}
+
 
 MARKET_GROUPS = [
     ("home", "draw", "away"),
@@ -394,30 +427,39 @@ MARKET_GROUPS = [
     ("over_3.5", "under_3.5"),
     ("btts_yes", "btts_no"),
     ("dc_1x", "dc_x2", "dc_12"),
+    ("ht_0.5", "under_ht_0.5"),
+    ("at_0.5", "under_at_0.5"),
+    ("ht_1.5", "under_ht_1.5"),
+    ("at_1.5", "under_at_1.5"),
 ]
 
 
-def de_vig_markets(odds: dict) -> dict:
-    """Probabilidade implícita nas odds com a margem da casa removida (proporcional)."""
+def de_vig_markets(odds: dict, method: str = "power") -> dict:
+    """Probabilidade implícita nas odds com a margem da casa removida.
+
+    Usa o mesmo método de devig configurado no app (proportional/power/shin)
+    para que a mistura e a checagem de vantagem falem a mesma língua.
+    """
+    from . import market as mk
     out = {}
     for group in MARKET_GROUPS:
         if not all(k in odds and odds[k] and odds[k] > 1.0 for k in group):
             continue
-        raw = {k: 1.0 / odds[k] for k in group}
-        s = sum(raw.values())
-        if s <= 0:
+        qs = mk.devig([odds[k] for k in group], method)
+        if not qs:
             continue
-        for k in group:
-            out[k] = raw[k] / s
+        for k, q in zip(group, qs, strict=False):
+            out[k] = q
     return out
 
 
-def blend_markets(model_markets: dict, odds: dict, model_weight: float = 0.25) -> dict:
+def blend_markets(model_markets: dict, odds: dict, model_weight: float = 0.25,
+                  method: str = "power") -> dict:
     """Combina probabilidade do modelo (já calibrada) com o consenso do mercado."""
     w = max(0.0, min(model_weight, 1.0))
     if w >= 1.0:
         return dict(model_markets)
-    market_probs = de_vig_markets(odds)
+    market_probs = de_vig_markets(odds, method)
     out = dict(model_markets)
     for group in MARKET_GROUPS:
         if not all(k in model_markets and k in market_probs for k in group):
@@ -430,150 +472,158 @@ def blend_markets(model_markets: dict, odds: dict, model_weight: float = 0.25) -
     return out
 
 
-GOAL_MARKETS = ["over_1.5", "over_2.5", "under_2.5", "btts_yes", "btts_no", "over_3.5", "under_3.5"]
+# ------------------------------------------------------------------ seleção v3
+# A v2.1 escolhia "o mercado mais provável" — dinâmica que acerta muito e
+# perde dinheiro: 83% de acerto a @1,20 devolve −0,4% por aposta *antes* da
+# margem. A v3 escolhe por **valor com preço-alvo**: probabilidade na faixa
+# saudável, odd acima do piso, vantagem medida sobre o mercado devigado e
+# stake dimensionada por Kelly com desconto de incerteza, ordenando por
+# **crescimento esperado de capital**.
 
-# v2.1: o app é de GOLS e pensa no MAIS PROVÁVEL, não no maior EV.
-# Sem over/under 0.5 (odd micro, inútil em múltipla) e sem 1X2/dupla chance.
-# A ordem abaixo é só desempate quando duas linhas têm probabilidade igual.
+GOAL_MARKETS = ["over_1.5", "over_2.5", "under_2.5", "btts_yes", "btts_no",
+                "over_3.5", "under_3.5"]
 GOAL_PICK_MARKETS = ["over_1.5", "ht_0.5", "at_0.5", "over_2.5", "btts_yes",
                      "under_2.5", "ht_1.5", "at_1.5",
-                     "btts_no", "over_3.5", "under_3.5", "under_1.5"]
-PICK_MIN_PROB = 0.60   # abaixo disso nem é candidato
-PICK_MAX_PROB = 0.95   # acima disso a odd já não paga o risco de fila
+                     "btts_no", "over_3.5", "under_3.5", "under_1.5",
+                     "under_ht_0.5", "under_at_0.5",
+                     "under_ht_1.5", "under_at_1.5"]
 
-MARKET_FAMILY = {
-    "ht_0.5": "gols", "at_0.5": "gols", "ht_1.5": "gols", "at_1.5": "gols",
-    "over_1.5": "gols", "over_2.5": "gols", "over_3.5": "gols",
-    "under_1.5": "gols", "under_2.5": "gols", "under_3.5": "gols",
-    "btts_yes": "btts", "btts_no": "btts",
-    "home": "resultado", "draw": "resultado", "away": "resultado",
-    "dc_1x": "dupla", "dc_x2": "dupla", "dc_12": "dupla",
+# apenas gols/BTTS entram em candidatos e múltiplas
+CANDIDATE_MARKETS = list(GOAL_PICK_MARKETS)
+
+# faixas de operação (calibradas no backtest — ver backtest_report.md)
+POLICY = {
+    "singles": {
+        "min_ev": 0.025, "min_edge": 0.015,
+        "min_prob": 0.50, "max_prob": 0.85,
+        "min_odd": 1.45, "max_odd": 3.20,
+    },
+    "legs": {
+        "min_ev": 0.02, "min_edge": 0.01,
+        "min_prob": 0.62, "max_prob": 0.88,
+        "min_odd": 1.32, "max_odd": 2.00,
+    },
+    # 1X2 é mercado eficiente: mesmos limites dos singles, declarados aqui para
+    # não cair em fallback silencioso. Só entra quando o usuário liga include_1x2.
+    "resultado": {
+        "min_ev": 0.025, "min_edge": 0.015,
+        "min_prob": 0.45, "max_prob": 0.80,
+        "min_odd": 1.45, "max_odd": 3.20,
+    },
 }
-# apenas gols/BTTS entram em candidatos e múltiplas (v2.1)
-CANDIDATE_MARKETS = ["over_1.5", "ht_0.5", "at_0.5", "over_2.5", "under_2.5",
-                     "over_3.5", "under_3.5", "btts_yes", "btts_no", "under_1.5",
-                     "ht_1.5", "at_1.5"]
 
-LEG_MIN_PROB = 0.40
 MAX_LEGS = 4
-MAX_PER_FAMILY = 2
-ANCHOR_ODD = 1.20
-ANCHOR_MIN_PROB = 0.72
+PICK_MIN_PROB = POLICY["singles"]["min_prob"]   # compatibilidade de leitura
+PICK_MAX_PROB = POLICY["singles"]["max_prob"]
 
 
-def candidate_markets(analysis: dict, odds: dict | None):
-    """Ângulos candidatos de um jogo, do MAIS PROVÁVEL para o menos provável.
+def _market_index(analysis: dict, odds: dict | None, market: str,
+                  devig_method: str) -> float | None:
+    """Probabilidade devigada do mercado para o MESMO desfecho (ou None)."""
+    from . import market as mk
+    if not odds:
+        return None
+    group = next((g for g in MARKET_GROUPS if market in g), (market,))
+    pair = [k for k in group if odds.get(k) and odds[k] > 1.0]
+    if len(pair) < 2:
+        return None
+    qs = mk.devig([odds[k] for k in pair], devig_method)
+    for k, q in zip(pair, qs, strict=False):
+        if k == market:
+            return q
+    return None
 
-    v2.1: apenas mercados de gols e BTTS; probabilidade manda, EV é informativo.
+
+def market_candidates(analysis: dict, odds: dict | None, *, mode: str = "singles",
+                      n_eff: float | None = None,
+                      devig_method: str = "power",
+                      kelly_mult: float = 0.25, cap: float = 0.03,
+                      uncertainty: bool = True,
+                      markets: list[str] | tuple[str, ...] | None = None) -> list[dict]:
+    """Todos os mercados com valor, em ordem de crescimento esperado.
+
+    Cada item traz a ficha completa: probabilidade do modelo, probabilidade
+    devigada do mercado, vantagem, EV, odd mínima aceitável, stake e
+    crescimento esperado — além dos motivos de recusa quando não elegível.
+
+    ``markets`` restringe o cardápio (ex.: ``("home", "draw", "away")`` para o
+    1X2, que fica fora de ``CANDIDATE_MARKETS`` de propósito: é o mercado mais
+    eficiente da casa e raramente paga a margem).
     """
-    probs = analysis["markets"]
+    from . import market as mk
+    policy = POLICY.get(mode, POLICY["singles"])
+    probs = (analysis or {}).get("markets") or {}
     odds = odds or {}
     out = []
-    for mk in CANDIDATE_MARKETS:
-        p = probs.get(mk)
-        if p is None:
+    for market_key in (markets or CANDIDATE_MARKETS):
+        p = probs.get(market_key)
+        if p is None or p <= 0:
             continue
-        odd = odds.get(mk) or round(1.0 / p, 2)
-        ev = round(p * odds[mk] - 1, 4) if odds.get(mk) else None
-        out.append({
-            "market": mk, "label": MARKET_LABELS[mk],
-            "prob": round(p, 4), "odd": round(odd, 2),
-            "ev": ev,
-            "score": round(p, 4),
-            "family": MARKET_FAMILY[mk],
+        odd = odds.get(market_key) or mk.breakeven_odd(p)
+        mkt_p = _market_index(analysis, odds, market_key, devig_method)
+        card = mk.evaluate(
+            p, odd, mkt_p, n_eff=n_eff, kelly_mult=kelly_mult, cap=cap,
+            uncertainty=uncertainty, **policy,
+        )
+        # vantagem do modelo "puro" (pós-calibração, antes da mistura): mostra
+        # quanto da divergência sobrevive à diluição com o mercado
+        edge_model = None
+        model_probs = analysis.get("model_markets") or {}
+        if mkt_p is not None and market_key in model_probs:
+            edge_model = round(model_probs[market_key] - mkt_p, 4)
+        card.update({
+            "market": market_key,
+            "label": MARKET_LABELS.get(market_key, market_key),
+            "family": MARKET_FAMILY.get(market_key, "outros"),
+            "odd_is_fair": market_key not in odds,
+            "edge_model": edge_model,
         })
-    # mais provável primeiro; desempate pela ordem de preferência (over primeiro)
-    pref = {mk: i for i, mk in enumerate(GOAL_PICK_MARKETS)}
-    out.sort(key=lambda c: (-c["prob"], pref.get(c["market"], 99)))
-    return [c for c in out if c["prob"] >= 0.40]
+        out.append(card)
+    out.sort(key=lambda c: (-c["growth"], -c["ev"]))
+    return out
 
 
-def build_multiple(analyzed: list, settings) -> dict | None:
-    """Múltipla do dia no estilo 'linha mais segura de cada jogo' (v2.1).
+def pick_value(analysis: dict, odds: dict | None, *, mode: str = "singles",
+               n_eff: float | None = None, **kw) -> dict | None:
+    """Melhor entrada elegível (ou ``None`` — a resposta mais comum e honesta)."""
+    for card in market_candidates(analysis, odds, mode=mode, n_eff=n_eff, **kw):
+        if card["take"]:
+            return card
+    return None
 
-    Uma perna por jogo = o mercado de gols MAIS PROVÁVEL daquele jogo
-    (pode repetir: se Over 1.5 é o mais seguro em todos, a múltipla é
-    toda de Over 1.5 — exatamente a dinâmica clássica). Pernas ordenadas
-    pela probabilidade, até MAX_LEGS, cada uma acima de PICK_MIN_PROB.
+
+def watchlist(analysis: dict, odds: dict | None, *, mode: str = "singles",
+              n_eff: float | None = None, limit: int = 3, **kw) -> list[dict]:
+    """Quase-entradas do jogo: os melhores preços que NÃO passam o filtro.
+
+    Serve para disciplina: mostra o que ficou de fora e por quê (preço curto,
+    EV insuficiente), para o usuário não "forçar" a entrada.
     """
-    per_match = []
-    for r in analyzed:
-        cands = [c for c in candidate_markets(r["analysis"], r.get("odds"))
-                 if c["prob"] >= PICK_MIN_PROB]
-        if cands:
-            per_match.append((r, cands[0]))
-    per_match.sort(key=lambda rc: -rc[1]["prob"])
-
-    legs = []
-    for r, c in per_match:
-        if len(legs) >= MAX_LEGS:
-            break
-        legs.append({
-            "fixture_id": r["id"],
-            "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
-            "league": r["league"],
-            "kickoff_utc": r["kickoff_utc"],
-            "market": c["market"],
-            "label": c["label"],
-            "prob": c["prob"],
-            "odd": c["odd"],
-            "ev": c["ev"],
-            "anchor": c["odd"] < ANCHOR_ODD,
-            "_n_eff": r["analysis"].get("n_eff", 12.0),
-        })
-
-    if len(legs) < 2:
-        return None
-
-    comb_odd = 1.0
-    comb_prob = 1.0
-    for l in legs:
-        comb_odd *= l["odd"]
-        comb_prob *= l["prob"]
-
-    real = all(l["ev"] is not None for l in legs)
-    ev = round(comb_prob * comb_odd - 1, 4) if real else None
-    # stake FIXA sugerida: Kelly não se aplica ao modo acerto (sem edge medido)
-    stake = flat_stake(settings.bankroll, settings.stake_cap_pct, fraction=0.5)
-
-    return {
-        "legs": legs,
-        "combined_odd": round(comb_odd, 2),
-        "combined_prob": round(comb_prob, 4),
-        "ev": ev,
-        "stake": stake,
-    }
+    cards = market_candidates(analysis, odds, mode=mode, n_eff=n_eff, **kw)
+    return [c for c in cards if not c["take"]][:limit]
 
 
 def pick_best_market(analysis: dict, odds: dict | None, mode: str = "prob"):
-    """
-    v2.1 — seleção SOMENTE entre mercados de gols/BTTS.
-    mode="prob" (padrão): o mais provável de acontecer dentro da janela
-    [PICK_MIN_PROB, PICK_MAX_PROB]; odds só aparecem como informação.
-    mode="ev": mesma lista de gols, ordenada por valor esperado.
-    """
-    probs = analysis["markets"]
+    """Compat: a v2.1 escolhia o mais provável; mantida só para comparação
+    histórica no backtest. Produção usa ``pick_value``."""
+    probs = (analysis or {}).get("markets") or {}
     odds = odds or {}
     candidates = []
-    for pref_i, mk in enumerate(GOAL_PICK_MARKETS):
-        p = probs.get(mk, 0)
+    for pref_i, market_key in enumerate(GOAL_PICK_MARKETS):
+        p = probs.get(market_key, 0)
         if not (PICK_MIN_PROB <= p <= PICK_MAX_PROB):
             continue
-        odd = odds.get(mk)
+        odd = odds.get(market_key)
         ev = p * odd - 1 if odd else None
         show_odd = odd or 1 / p
-        if mode == "ev":
-            score = ev if ev is not None else -9.0
-        else:
-            score = p
-        candidates.append((score, -pref_i, mk, p, show_odd, ev))
+        score = (ev if ev is not None else -9.0) if mode == "ev" else p
+        candidates.append((score, -pref_i, market_key, p, show_odd, ev))
     if not candidates:
         return None
-    candidates.sort(key=lambda t: (-t[0], t[1]))
-    score, _pi, mk, p, odd, ev = candidates[0]
+    score, _pi, market_key, p, odd, ev = sorted(candidates, key=lambda t: (-t[0], t[1]))[0]
     return {
-        "market": mk,
-        "label": MARKET_LABELS[mk],
+        "market": market_key,
+        "label": MARKET_LABELS[market_key],
         "prob": round(p, 4),
         "odd": round(odd, 2),
         "odd_is_fair": ev is None,
@@ -583,8 +633,7 @@ def pick_best_market(analysis: dict, odds: dict | None, mode: str = "prob"):
 
 
 def flat_stake(bankroll: float, cap_pct: float = 3.0, fraction: float = 0.5) -> dict:
-    """Stake fixa sugerida para o modo 'mais provável' (sem edge medido,
-    Kelly não se aplica): fração do teto por aposta. Padrão: 1,5% da banca."""
+    """Stake fixa — mantida para o modo legado; a v3 usa Kelly com incerteza."""
     pct = round(cap_pct * fraction, 2)
     return {"stake": round(bankroll * pct / 100, 2), "kelly_full": None,
             "pct": pct, "sigma": None}
@@ -593,28 +642,84 @@ def flat_stake(bankroll: float, cap_pct: float = 3.0, fraction: float = 0.5) -> 
 def kelly_stake(prob: float, odd: float, bankroll: float,
                 fraction: float = 0.25, cap_pct: float = 0.03,
                 n_eff: float | None = None, uncertainty: bool = True) -> dict:
-    """Kelly fracionado com teto de risco por aposta.
-
-    v2: com uncertainty=True, a probabilidade usada no Kelly é a estimativa
-    descontada de um desvio-padrão amostral (p - sigma), com sigma =
-    sqrt(p(1-p)/n). Amostra pequena -> sigma grande -> stake menor.
-    """
-    b = odd - 1
-    if b <= 0:
-        return {"stake": 0.0, "kelly_full": 0.0, "pct": 0.0}
-    p = prob
-    sigma = 0.0
-    if uncertainty and n_eff:
-        n = max(n_eff * 2.0, 8.0)   # cada jogo informa ~2 observações (pró e contra)
-        sigma = math.sqrt(max(p * (1 - p), 1e-9) / n)
-        p = max(p - sigma, 0.5 * prob)
-    q = 1 - p
-    k = (b * p - q) / b
-    k = max(k, 0.0)
-    frac = min(k * fraction, cap_pct)
+    """Kelly fracionado com teto e desconto de incerteza (via app.market)."""
+    from . import market as mk
+    st = mk.stake_fraction(prob, odd, kelly_mult=fraction, cap=cap_pct,
+                           n_eff=n_eff, uncertainty=uncertainty)
     return {
-        "stake": round(bankroll * frac, 2),
-        "kelly_full": round(k, 4),
-        "pct": round(frac * 100, 2),
-        "sigma": round(sigma, 4),
+        "stake": round(bankroll * st["kelly_frac"], 2),
+        "kelly_full": st["kelly_full"],
+        "pct": round(st["kelly_frac"] * 100, 3),
+        "sigma": None,
+        "p_used": st["p_used"],
     }
+
+
+def build_multiple(analyzed: list, settings) -> dict | None:
+    """Múltipla do dia (v3): pernas elegíveis por valor, escada 1..N, stake Kelly.
+
+    Compatível com a assinatura antiga; a matemática vive em ``app/parlay.py``.
+    """
+    from . import parlay
+    bankroll = getattr(settings, "bankroll", 1000.0)
+    faction = getattr(settings, "kelly_fraction", 0.25)
+    cap = getattr(settings, "stake_cap_pct", 3.0) / 100.0
+    devig_method = getattr(settings, "devig_method", "power")
+    cands = []
+    for r in analyzed:
+        n_eff = r["analysis"].get("n_eff") or r["analysis"].get("sample_home")
+        for card in market_candidates(r["analysis"], r.get("odds"), mode="legs",
+                                      n_eff=n_eff, devig_method=devig_method,
+                                      kelly_mult=faction, cap=cap):
+            if not card["take"]:
+                continue
+            cands.append({
+                "fixture_id": r["id"],
+                "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
+                "league": r["league"],
+                "kickoff_utc": r["kickoff_utc"],
+                "market": card["market"],
+                "label": card["label"],
+                "prob": card["prob"],
+                "odd": card["odd"],
+                "market_prob": card["market_prob"],
+                "edge": card["edge"],
+                "ev": card["ev"],
+                "growth": card["growth"],
+                "family": card["family"],
+                "n_eff": n_eff,
+            })
+    # no máximo uma perna por jogo (evita correlação trivial)
+    best_per_fixture: dict = {}
+    for c in cands:
+        cur = best_per_fixture.get(c["fixture_id"])
+        if cur is None or c["growth"] > cur["growth"]:
+            best_per_fixture[c["fixture_id"]] = c
+    pool = list(best_per_fixture.values())
+    result = parlay.build(pool, max_legs=MAX_LEGS, kelly_mult=faction, cap=cap,
+                          daily_cap_pct=settings_daily_cap(settings))
+    if not result.get("available"):
+        return None
+    slip = result["slip"]
+    for leg in result["legs"]:
+        leg["anchor"] = leg["odd"] < 1.45
+    return {
+        "legs": result["legs"],
+        "combined_odd": slip["combined_odd"],
+        "combined_prob": slip["prob_independent"],
+        "combined_prob_correlated": slip["prob_joint"],
+        "ev": slip["ev"],
+        "rho_avg": slip["rho_avg"],
+        "margin_gross": slip["margin_gross"],
+        "breakeven_odd": slip["breakeven_odd"],
+        "ladder": result["ladder"],
+        "stake": {
+            "stake": round(bankroll * slip["stake_pct"] / 100.0, 2),
+            "pct": slip["stake_pct"],
+        },
+        "risk_note": result["risk_note"],
+    }
+
+
+def settings_daily_cap(settings) -> float:
+    return float(getattr(settings, "daily_cap_pct", 6.0))

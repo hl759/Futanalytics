@@ -21,8 +21,9 @@ import httpx
 from . import db
 
 FD_BASE = "https://api.football-data.org/v4"
-AF_BASE = "https://v3.football.football-api-sports.io"
-AF_BASE_ALT = "https://v3.football.api-sports.io"
+# Base oficial da API-Football (api-sports.io). A v2 tinha uma constante
+# morta com URL inexistente ("v3.football.football-api-sports.io").
+AF_BASE = "https://v3.football.api-sports.io"
 
 # football-data.org: competições do tier gratuito que interessam
 FD_COMPETITIONS = {
@@ -39,6 +40,14 @@ FD_COMPETITIONS = {
 }
 
 # API-Football: ligas prioritárias (id, nome)
+# mercados de gols da API-Football -> chaves internas
+_AF_GOALS = {
+    "Over 0.5": "over_0.5", "Over 1.5": "over_1.5",
+    "Over 2.5": "over_2.5", "Over 3.5": "over_3.5",
+    "Under 0.5": "under_0.5", "Under 1.5": "under_1.5",
+    "Under 2.5": "under_2.5", "Under 3.5": "under_3.5",
+}
+
 AF_LEAGUES = {
     71: "Brasileirão Série A",
     72: "Brasileirão Série B",
@@ -59,7 +68,7 @@ class ProviderError(Exception):
 
 # ---------------------------------------------------------------- football-data
 async def _fd_get(client: httpx.AsyncClient, path: str, token: str, params=None):
-    for attempt in range(4):
+    for _attempt in range(4):
         r = await client.get(
             f"{FD_BASE}{path}",
             headers={"X-Auth-Token": token},
@@ -148,7 +157,9 @@ async def fd_team_recent(token: str, team_id: int, team_name: str):
         days_ago = (today - played).days
         is_home = m["homeTeam"]["id"] == team_id
         gf, ga = (hg, ag) if is_home else (ag, hg)
-        games.append([days_ago, is_home, gf, ga])
+        # o adversário entra no histórico: habilita força do calendário no dossiê
+        opp = m["awayTeam"]["name"] if is_home else m["homeTeam"]["name"]
+        games.append([days_ago, is_home, gf, ga, None, None, opp])
     db.cache_set(key, games, 12 * 3600)
     return games
 
@@ -183,7 +194,7 @@ async def _af_get(client: httpx.AsyncClient, path: str, key: str, params=None):
     if db.api_usage_today(today) >= 95:
         raise ProviderError("Orçamento diário da API-Football (100 req) quase esgotado; usando apenas cache.")
     last_err = None
-    for base in (AF_BASE_ALT,):
+    for base in (AF_BASE,):
         try:
             r = await client.get(
                 f"{base}{path}",
@@ -279,7 +290,8 @@ async def af_team_recent(key: str, team_id: int, team_name: str):
         days_ago = (today - played).days
         is_home = f["teams"]["home"]["id"] == team_id
         gf, ga = (hg, ag) if is_home else (ag, hg)
-        games.append([days_ago, is_home, gf, ga])
+        opp = f["teams"]["away"]["name"] if is_home else f["teams"]["home"]["name"]
+        games.append([days_ago, is_home, gf, ga, None, None, opp])
     db.cache_set(ck, games, 12 * 3600)
     return games
 
@@ -305,20 +317,15 @@ async def af_odds(key: str, fixture_id: int):
                 if name == "Match Winner":
                     mk = {"Home": "home", "Draw": "draw", "Away": "away"}.get(val)
                 elif name == "Goals Over/Under":
-                    if val == "Over 0.5": mk = "over_0.5"
-                    elif val == "Over 1.5": mk = "over_1.5"
-                    elif val == "Over 2.5": mk = "over_2.5"
-                    elif val == "Over 3.5": mk = "over_3.5"
-                    elif val == "Under 0.5": mk = "under_0.5"
-                    elif val == "Under 1.5": mk = "under_1.5"
-                    elif val == "Under 2.5": mk = "under_2.5"
-                    elif val == "Under 3.5": mk = "under_3.5"
+                    mk = _AF_GOALS.get(val)
                 elif name == "Both Teams Score":
                     mk = {"Yes": "btts_yes", "No": "btts_no"}.get(val)
-                elif name in ("Home Over/Under", "Home Team Total"):
-                    mk = {"Over 0.5": "ht_0.5", "Over 1.5": "ht_1.5"}.get(val)
-                elif name in ("Away Over/Under", "Away Team Total"):
-                    mk = {"Over 0.5": "at_0.5", "Over 1.5": "at_1.5"}.get(val)
+                elif name in ("Home Over/Under", "Home Team Total", "Home Team Total Goals"):
+                    mk = {"Over 0.5": "ht_0.5", "Over 1.5": "ht_1.5",
+                          "Under 0.5": "under_ht_0.5", "Under 1.5": "under_ht_1.5"}.get(val)
+                elif name in ("Away Over/Under", "Away Team Total", "Away Team Total Goals"):
+                    mk = {"Over 0.5": "at_0.5", "Over 1.5": "at_1.5",
+                          "Under 0.5": "under_at_0.5", "Under 1.5": "under_at_1.5"}.get(val)
                 elif name == "Double Chance":
                     mk = {"Home/Draw": "dc_1x", "Draw/Away": "dc_x2", "Home/Away": "dc_12"}.get(val)
                 if mk and odd > 1.0:
@@ -389,12 +396,28 @@ def demo_team_recent(day: str, team: dict):
 
 
 def demo_odds(fixture_id: str, fair: dict):
-    """Odds de mercado simuladas: fair odds com margem de casa (~5%) e ruído."""
+    """Odds simuladas com margem realista — **sem fabricar valor**.
+
+    A v2 gerava odds *em torno* das probabilidades do próprio modelo, o que
+    produzia EV positivo em ~metade dos mercados: um demo que ensina o usuário
+    a ver valor onde não existe. Aqui o preço parte da odd justa, recebe a
+    margem da casa (2%–8%, dispersa entre mercados) e só então um ruído
+    pequeno de precificação — na média, EV negativo, como na vida real.
+    """
     rng = random.Random(fixture_id)
     odds = {}
     for mk, fo in fair.items():
-        # margem média de 5% com dispersão entre casas: às vezes a melhor odd
-        # do mercado supera a justa (é exatamente aí que existe valor real)
-        noise = rng.uniform(0.94, 1.10)
-        odds[mk] = round(max(fo * 0.95 * noise, 1.01), 2)
+        # o "mercado" sintético discorda do modelo (senão o modelo acertaria
+        # por construção e a demo seria circular): probabilidade perturbada
+        p_fair = 1.0 / fo if fo else 0.5
+        p_market = min(max(p_fair * rng.uniform(0.85, 1.18), 0.02), 0.98)
+        fo = 1.0 / p_market
+        if rng.random() < 0.30:
+            # erro de precificação do "mercado". Na vida real é raro e pequeno;
+            # aqui é ampliado de propósito para dar o que explorar na demo
+            # (com 0.5 de peso do modelo a divergência final vem pela metade).
+            odd = fo * rng.uniform(1.06, 1.20)
+        else:
+            odd = fo * (1 - rng.uniform(0.02, 0.08)) * rng.uniform(0.97, 1.03)
+        odds[mk] = round(max(odd, 1.01), 2)
     return odds

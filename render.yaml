@@ -6,3 +6,12 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      # token de escrita da API. Defina um valor qualquer (ex.: uma frase longa);
+      # sem ele o app fica ABERTO e qualquer pessoa com o link pode apagar bilhetes.
+      - key: APP_TOKEN
+        generateValue: true
+      # caminho do banco dentro do disco persistente (opcional; veja o DEPLOY.md)
+      - key: FUTA_DB
+        value: /var/data/futanalytics.db

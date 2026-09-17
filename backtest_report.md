@@ -1,179 +1,90 @@
-# Relatório de backtest — FutAnalytics v2
+# Relatório de backtest — FutAnalytics v3
 
-Gerado em 2026-09-11 · treino ['2324', '2425'] · teste ['2526'] (E0, SP1, I1, D1, F1)
+Gerado em 2026-09-17 · teste ['2324', '2425', '2526'] · treino ['1920', '2021', '2122', '2223'] · ligas E0, SP1, I1, D1, F1
+
+*4549 jogos avaliáveis (histórico ≥ 8 jogos) · cobertura de xG no teste: 0% · devig: power · peso do modelo na mistura: 25%*
+
+**Como ler este relatório.** ROI medido nas odds de **abertura** da B365 (o preço que se consegue de verdade antes do fechamento), com intervalo de confiança de 95% por bootstrap. CLV = quanto a odd pega bateu a odd de fechamento — o melhor indicador antecedente de vantagem real. Amostra pequena com IC largo **não** é evidência.
 
 ---
 
-## v2.0: gols, estimador por time
+## 1. Poder preditivo
 
-*1368 jogos avaliáveis (histórico ≥ 8 jogos)*
+### Brier e LogLoss (modelo / calibrado / misturado / mercado)
 
-### Métricas preditivas — v2.0: gols, estimador por time
+| Mercado | Brier ingênuo | Brier modelo | Brier calibrado | Brier +mercado | Brier mercado | LogLoss modelo | LogLoss mercado |
+|---|---|---|---|---|---|---|---|
+| over_2.5 | 0.2486 | 0.2569 | 0.2697 | 0.2413 | 0.2386 | 0.7126 | 0.6698 |
+| home | 0.2453 | 0.2204 | 0.2279 | 0.2078 | 0.2058 | 0.6337 | 0.5973 |
+| away | 0.2157 | 0.1943 | 0.2031 | 0.1840 | 0.1823 | 0.5744 | 0.5429 |
+| draw | 0.1895 | 0.1896 | 0.1943 | 0.1878 | 0.1870 | 0.5674 | 0.5593 |
 
-| Mercado | Brier modelo | Brier mercado | Brier ingênuo | LogLoss modelo | LogLoss mercado |
-|---|---|---|---|---|---|
-| over_2.5 | 0.2492 | 0.2421 | 0.2488 | 0.6932 | 0.6768 |
-| home | 0.2443 | 0.2115 | 0.2458 | 0.6816 | 0.6102 |
-| away | 0.2145 | 0.1875 | 0.2142 | 0.6204 | 0.5561 |
-| draw | 0.1884 | 0.1879 | 0.1897 | 0.5637 | 0.5622 |
+*Baseline ingênuo (frequência base): 0.537 de Over 2.5 na amostra.*
 
-**Calibração Over 2.5** (prob. média prevista → frequência real):
+**Teste de alfa (Over 2.5):** quando o modelo diverge do mercado, quem acerta?
 
-| Faixa | Previsto | Real | n | Desvio |
-|---|---|---|---|---|
-| 20%–40% | 0.333 | 0.375 | 16 | +0.042 |
-| 40%–60% | 0.508 | 0.532 | 1173 | +0.024 |
-| 60%–80% | 0.631 | 0.568 | 176 | -0.063 |
-| 80%–100% | 0.952 | 0.667 | 3 | -0.285 |
-
-**Teste de alfa (Over 2.5):** ao divergir do mercado, quem tem razão?
-
-| Quintil | Divergência (mod-mkt) | Mercado diz | Real |
+| Quintil | Divergência (modelo−mercado) | Mercado diz | Real |
 |---|---|---|---|
-| Q1 | -0.118 | 0.628 | 0.652 |
-| Q2 | -0.041 | 0.554 | 0.542 |
-| Q3 | +0.004 | 0.520 | 0.542 |
-| Q4 | +0.039 | 0.486 | 0.473 |
-| Q5 | +0.107 | 0.436 | 0.467 |
+| Q1 | -0.313 | 0.465 | 0.485 |
+| Q2 | -0.099 | 0.585 | 0.595 |
+| Q3 | -0.024 | 0.572 | 0.560 |
+| Q4 | +0.035 | 0.545 | 0.554 |
+| Q5 | +0.113 | 0.504 | 0.492 |
 
-### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
+### O modelo antecipa o fechamento? (alpha em CLV)
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** nenhuma aposta passou o filtro de EV (disciplina: sem valor detectado, sem aposta).
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 1 apostas · ROI flat **+20.00%** · ROI Kelly **+0.60%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| over_2.5 | 1 | +20.00% |
-
-CLV vs. fechamento B365 (1 apostas): média **+2.56%** · bateu o fechamento em **100.0%**
-
-**Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
-
-
-## v2.1: xG + calibração
-
-*1368 jogos avaliáveis (histórico ≥ 8 jogos)*
-
-### Métricas preditivas — v2.1: xG + calibração
-
-| Mercado | Brier modelo | Brier mercado | Brier ingênuo | LogLoss modelo | LogLoss mercado |
+| Mercado | n | β | erro t | R² | Leitura |
 |---|---|---|---|---|---|
-| over_2.5 | 0.2478 | 0.2421 | 0.2488 | 0.6885 | 0.6768 |
-| home | 0.2326 | 0.2115 | 0.2458 | 0.6586 | 0.6102 |
-| away | 0.2105 | 0.1875 | 0.2142 | 0.6108 | 0.5561 |
-| draw | 0.1905 | 0.1879 | 0.1897 | 0.5693 | 0.5622 |
+| over_2.5 | 4549 | +0.005 | +1.66 | 0.001 | sem alpha detectável |
+| home | 4549 | -0.008 | -2.41 | 0.001 | o modelo é sistematicamente CONTRÁRIO ao movimento |
+| away | 4549 | -0.009 | -3.00 | 0.002 | o modelo é sistematicamente CONTRÁRIO ao movimento |
 
-**Calibração Over 2.5** (prob. média prevista → frequência real):
+Referência: |t| < 2 significa que a divergência do modelo não prevê o fechamento — apostar nela é, na média, pagar a margem.
 
-| Faixa | Previsto | Real | n | Desvio |
+## 2. Políticas em dinheiro
+
+### Políticas em dinheiro (odds de abertura; stake Kelly fracionado)
+
+| Política | Apostas | Acerto | ROI | IC 95% do ROI | ROI Kelly | Drawdown máx | CLV médio | Bateu fechamento |
+|---|---|---|---|---|---|---|---|---|
+| mais provável (v2) | 100 | 68.0% | -3.62% | [-16.7%, +9.0%] | +0.00% | 0.0% | +0.62% | 45.0% (100) |
+| casa valor+faixa (exp.) | 135 | 51.1% | -9.24% | [-25.1%, +5.5%] | -20.46% | 28.6% | -0.18% | 41.5% (135) |
+| valor+faixa (v3) | 46 | 47.8% | -1.87% | [-29.6%, +28.4%] | -1.73% | 6.0% | +0.77% | 47.8% (46) |
+| valor só-modelo | 223 | 45.7% | -12.73% | [-25.4%, +0.1%] | -20.70% | 21.4% | -0.52% | 38.1% (223) |
+| oráculo do fechamento | 1230 | 57.9% | +4.18% | [-0.8%, +9.4%] | +1.73% | 0.3% | +9.45% | 100.0% (1230) |
+| favorito O/U 2.5 | 4549 | 58.6% | -3.87% | [-6.1%, -1.6%] | +0.00% | 0.0% | +0.18% | 42.6% (4549) |
+
+**ROI por faixa de odd (política v3, odds de abertura)** — onde o dinheiro vive:
+
+| Faixa de odd | Apostas | Acerto | ROI | IC 95% |
 |---|---|---|---|---|
-| 20%–40% | 0.387 | 0.397 | 73 | +0.011 |
-| 40%–60% | 0.522 | 0.538 | 1158 | +0.016 |
-| 60%–80% | 0.655 | 0.576 | 132 | -0.079 |
-| 80%–100% | 0.910 | 0.800 | 5 | -0.110 |
+| 1.80–2.20 | 39 | 48.7% | -1.64% | [-32.8%, +29.5%] |
+| 2.20–3.00 | 7 | 42.9% | -3.14% | [-68.6%, +91.1%] |
 
-**Teste de alfa (Over 2.5):** ao divergir do mercado, quem tem razão?
+**Múltiplas (pernas elegíveis por dia, montadas por crescimento esperado):**
 
-| Quintil | Divergência (mod-mkt) | Mercado diz | Real |
-|---|---|---|---|
-| Q1 | -0.105 | 0.615 | 0.601 |
-| Q2 | -0.032 | 0.547 | 0.575 |
-| Q3 | +0.009 | 0.518 | 0.604 |
-| Q4 | +0.043 | 0.495 | 0.462 |
-| Q5 | +0.105 | 0.448 | 0.435 |
-
-### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
-
-**PRODUÇÃO — modelo calibrado + mercado (25%):** 2 apostas · ROI flat **+22.50%** · ROI Kelly **+0.00%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| over_2.5 | 2 | +22.50% |
-
-CLV vs. fechamento B365 (2 apostas): média **+2.51%** · bateu o fechamento em **100.0%**
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 2 apostas · ROI flat **+59.00%** · ROI Kelly **+2.79%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| over_2.5 | 1 | +25.00% |
-| under_2.5 | 1 | +93.00% |
-
-CLV vs. fechamento B365 (2 apostas): média **+2.61%** · bateu o fechamento em **100.0%**
-
-**Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
-
-
-## v2.2: modelo conjunto por adversário + xG + calibração
-
-*1368 jogos avaliáveis (histórico ≥ 8 jogos)*
-
-### Métricas preditivas — v2.2: modelo conjunto por adversário + xG + calibração
-
-| Mercado | Brier modelo | Brier mercado | Brier ingênuo | LogLoss modelo | LogLoss mercado |
+| Pernas | Bilhetes | Acerto | Odd média | ROI | Margem efetiva média |
 |---|---|---|---|---|---|
-| over_2.5 | 0.2460 | 0.2421 | 0.2488 | 0.6859 | 0.6768 |
-| home | 0.2256 | 0.2115 | 0.2458 | 0.6464 | 0.6102 |
-| away | 0.1997 | 0.1875 | 0.2142 | 0.5908 | 0.5561 |
-| draw | 0.1920 | 0.1879 | 0.1897 | 0.5769 | 0.5622 |
+| 2 | 7 | 14.3% | 4.10 | -37.00% [-100.0%, +89.0%] | +0.00% |
+| 3 | 1 | 0.0% | 10.27 | -100.00% — | +0.00% |
 
-**Calibração Over 2.5** (prob. média prevista → frequência real):
+### Métodos de devig (qual descreve melhor o mercado?)
 
-| Faixa | Previsto | Real | n | Desvio |
+| Método | Brier home | Brier draw | Brier away | Brier Over 2.5 |
 |---|---|---|---|---|
-| 20%–40% | 0.391 | 0.500 | 42 | +0.109 |
-| 40%–60% | 0.532 | 0.523 | 1106 | -0.009 |
-| 60%–80% | 0.658 | 0.583 | 204 | -0.075 |
-| 80%–100% | 0.933 | 0.875 | 16 | -0.058 |
+| proportional | 0.2060 | 0.1869 | 0.1827 | 0.2387 |
+| power | 0.2058 | 0.1870 | 0.1823 | 0.2386 |
+| shin | 0.2059 | 0.1869 | 0.1824 | 0.2386 |
 
-**Teste de alfa (Over 2.5):** ao divergir do mercado, quem tem razão?
+## 3. Correlação entre jogos da mesma rodada
 
-| Quintil | Divergência (mod-mkt) | Mercado diz | Real |
-|---|---|---|---|
-| Q1 | -0.074 | 0.606 | 0.612 |
-| Q2 | -0.008 | 0.540 | 0.579 |
-| Q3 | +0.027 | 0.525 | 0.505 |
-| Q4 | +0.062 | 0.495 | 0.469 |
-| Q5 | +0.124 | 0.457 | 0.511 |
+- Pares de jogos analisados: **8322**
+- P(Over 2.5) individual: **0.551** · produto das marginais: **0.29891** · probabilidade conjunta observada: **0.30233**
+- ρ (phi) implícito: **+0.0138**
 
-### Estratégia (blend modelo 25%, min_ev 3%, Kelly c/ desconto de incerteza)
+## 4. Limitações (leia antes de usar)
 
-**PRODUÇÃO — modelo calibrado + mercado (25%):** 5 apostas · ROI flat **+25.60%** · ROI Kelly **+0.00%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| over_2.5 | 5 | +25.60% |
-
-CLV vs. fechamento B365 (5 apostas): média **+1.33%** · bateu o fechamento em **80.0%**
-
-**SÓ MODELO — calibrado, sem mistura com mercado:** 5 apostas · ROI flat **+29.80%** · ROI Kelly **+2.32%**
-
-| Mercado | Apostas | ROI flat |
-|---|---|---|
-| over_2.5 | 5 | +29.80% |
-
-CLV vs. fechamento B365 (5 apostas): média **+0.74%** · bateu o fechamento em **60.0%**
-
-**Baseline (todo Over 2.5 na B365):** 1368 apostas · ROI flat **-2.52%**
-
-
-## v2.2 · dinâmica 'mais provável' (produção atual)
-
-### Dinâmica v2.1 — 'linha mais segura de gols por jogo'
-
-**1368 pernas** · acerto real **81.1%** · prob média prometida 83.3% (desvio -2.2 p.p.)
-
-| Mercado | Pernas | Acerto |
-|---|---|---|
-| ht_0.5 | 642 | 83.3% |
-| over_1.5 | 417 | 77.9% |
-| under_3.5 | 157 | 78.3% |
-| at_0.5 | 136 | 83.1% |
-| over_2.5 | 9 | 100.0% |
-| ht_1.5 | 4 | 50.0% |
-| over_3.5 | 2 | 50.0% |
-| btts_yes | 1 | 100.0% |
-
-**Múltipla do dia (até 4 pernas):** 101 dias · green total **49.5%** · 3 pernas: **58.7%** (121 dias)
-
+- Odds de abertura B365 apenas: não há comparação entre casas nem odds de mercados de time (ambas marcam sim/não, totais por time).
+- A amostra de cada liga é de ~1.400 jogos por temporada; ROI com IC que cruza zero **não** é lucro demonstrado.
+- A calibração é treinada em temporadas passadas e aplicada adiante; mudanças de regime (regras, estilo de jogo) reduzem sua validade.
+- Modelo não vê escalação, lesão, motivação ou clima: EV alto suspeito deve ser conferido antes de virar aposta.

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Dados e estado local (nunca versionar: são grandes e/ou específicos da máquina)
+futanalytics.db
+futanalytics.db-wal
+futanalytics.db-shm
+data_cache/
+data_mirror/
+*.csv
+!tests/**/*.csv
+
+# Backups locais exportados pela interface
+futanalytics-backup-*.json
+
+# Sistema
+.DS_Store
