@@ -1,0 +1,6 @@
+# banco local e caches NÃO sobem para o Git/Render (depois do deploy, o app recria)
+futanalytics.db
+data_cache/
+__pycache__/
+*.pyc
+.venv/

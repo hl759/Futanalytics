@@ -1,13 +1,22 @@
-"""FutAnalytics v2: plataforma de análise diária de futebol.
+"""FutAnalytics v2.3: plataforma de análise diária de futebol.
 
-v2 — ganhos validados em backtest (app/backtest.py → backtest_report.md):
-- histórico com xG do Understat quando a liga tem cobertura;
-- dois horizontes de força (estrutural + forma recente);
-- calibração isotônica das probabilidades do modelo (modos xg/goals);
-- peso do modelo vs. mercado reduzido (0.25) — o mercado manda, o modelo filtra;
-- Kelly com desconto de incerteza amostral;
-- modo sombra (toda recomendação vira bilhete de auditoria) e CLV:
-  registro da odd de fechamento para medir edge de verdade.
+v2.3 — "Trader Free":
+- ODDS REAIS GRÁTIS e sem chave (football-data.co.uk: B365 + Pinnacle das
+  próximas rodadas); demais linhas de gols derivadas do consenso por inversão
+  Poisson — marcadas como "derivada". Sem preço, o app mostra a odd justa do
+  modelo, sem fingir mercado.
+- Seleção por EQUILÍBRIO acerto × odd (modo padrão "balanced") e múltipla com
+  alvo de odd configurável;
+- CHECKLIST DO TRADER por jogo (amostra, insumo, modelo×mercado, descanso,
+  tendência, H2H, liga) com nota 0–10 e selo A/B/C;
+- NADA é gravado automaticamente: o modo sombra deixou de existir. Bilhetes,
+  resultados e CLV só entram quando VOCÊ registra; o único dado não-volátil
+  escrito sozinho é o cache temporário das APIs (expira e é limpo sozinho) —
+  sem ele as cotas gratuitas estourariam na primeira meia hora.
+
+v2 (mantida) — ganhos validados em backtest (app/backtest.py):
+- xG do Understat, dois horizontes de força, modelo conjunto por liga,
+  calibração isotônica, peso do mercado 0.25, Kelly com incerteza, CLV.
 """
 from __future__ import annotations
 
@@ -23,16 +32,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import calibration, db, joint, provider, understat
+from . import calibration, db, joint, odds_fd, provider, understat
 from .model import (
     MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
-    flat_stake, kelly_stake, league_priors, league_xg_priors, pick_best_market,
+    de_vig_markets, flat_stake, kelly_stake, league_priors, league_xg_priors,
+    pick_best_market, trader_checklist,
 )
 
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -50,8 +60,11 @@ class Settings(BaseModel):
     xg_weight: float = 0.65           # peso do xG sobre gols brutos (0 = desligar)
     use_calibration: bool = True      # aplicar curvas isotônicas treinadas
     kelly_uncertainty: bool = True    # Kelly desconta incerteza da amostra
-    shadow_mode: bool = False         # registrar toda recomendação como bilhete-sombra
-    pick_mode: str = "prob"           # v2.1: "prob" = mais provável (gols) | "ev" = valor esperado
+    pick_mode: str = "balanced"       # v2.3: "balanced" = acerto × odd | "prob" | "ev"
+    target_parlay_odd: float = 2.8    # odd-alvo da múltipla
+    min_leg_odd: float = 1.12         # perna abaixo disso só se não houver alternativa
+    use_fd_odds: bool = True          # odds reais grátis (football-data.co.uk)
+    derive_margin: float = 0.06       # margem aplicada nas linhas derivadas do consenso
 
 
 def load_settings() -> Settings:
@@ -157,6 +170,11 @@ def model_info():
             "form_weight": 0.25,
             "decay_long_halflife_days": round(0.6931 / 0.012, 0),
             "decay_short_halflife_days": round(0.6931 / 0.06, 0),
+            "target_parlay_odd_default": 2.8,
+        },
+        "fd_odds": {
+            "leagues": sorted(odds_fd.LEAGUE_TO_DIV.keys()),
+            "books": ["Bet365", "Pinnacle"],
         },
     }
 
@@ -185,8 +203,11 @@ class SettingsIn(BaseModel):
     xg_weight: float | None = None
     use_calibration: bool | None = None
     kelly_uncertainty: bool | None = None
-    shadow_mode: bool | None = None
     pick_mode: str | None = None
+    target_parlay_odd: float | None = None
+    min_leg_odd: float | None = None
+    use_fd_odds: bool | None = None
+    derive_margin: float | None = None
 
 
 @app.post("/api/settings")
@@ -338,16 +359,34 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
         analysis["league_env"] = {k: v for k, v in ctx.items() if k != "h2h"}
         analysis["h2h"] = ctx.get("h2h", [])
 
+    # ---------------- odds: real (API-Football) → real grátis (fd.co.uk) → justa
     odds = None
+    odds_meta = None
     if with_odds:
         if fx["provider"] == "af":
             try:
                 odds = await provider.af_odds(s.af_key, int(fx["id"].split("-")[1]))
                 odds = odds or None
+                if odds:
+                    odds_meta = {"source": "API-Football",
+                                 "real": sorted(odds.keys()), "derived": []}
             except provider.ProviderError:
                 odds = None
         elif fx["provider"] == "demo":
             odds = provider.demo_odds(fx["id"], analysis["fair_odds"])
+            odds_meta = {"source": "demo",
+                         "real": sorted(odds.keys()), "derived": []}
+    if odds is None and s.use_fd_odds and fx["provider"] in ("fd", "af"):
+        # camada gratuita: B365/Pinnacle das ligas europeias cobertas;
+        # as demais linhas vêm derivadas do consenso (marcadas "derived").
+        try:
+            pack = await odds_fd.odds_for_match(
+                fx["league"], fx["home"]["name"], fx["away"]["name"],
+                fx.get("kickoff_utc", ""), s.derive_margin)
+        except Exception:
+            pack = None
+        if pack:
+            odds, odds_meta = pack["odds"], pack["meta"]
 
     # v2: calibra as probabilidades do modelo ANTES de misturar com o mercado.
     # As curvas são por modo (xg/goals) porque a distribuição muda com o insumo.
@@ -364,8 +403,17 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
             }
 
     # Mistura com o consenso do mercado (margem removida), peso configurável.
+    # Só entram no blend os preços REAIS — odds derivadas nascem do consenso e
+    # não carregam informação nova; entrariam como vício circular.
+    blend_src = None
     if odds:
-        blended = blend_markets(analysis["markets"], odds, s.model_weight)
+        if odds_meta and odds_meta.get("source") == "football-data.co.uk":
+            real_keys = set(odds_meta.get("real") or [])
+            blend_src = {k: v for k, v in odds.items() if k in real_keys} or None
+        else:
+            blend_src = odds
+    if blend_src:
+        blended = blend_markets(analysis["markets"], blend_src, s.model_weight)
         if "model_markets" not in analysis:
             analysis["model_markets"] = analysis["markets"]
         analysis["markets"] = blended
@@ -373,7 +421,28 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
             k: round(1 / v, 2) if v > 0.01 else 99.0 for k, v in blended.items()
         }
 
-    best = pick_best_market(analysis, odds, mode=s.pick_mode)
+    # probabilidade implícita do mercado por mercado (para o checklist):
+    # reais via devig; derivadas desfazendo a margem que aplicamos.
+    odds_devig = None
+    if odds:
+        src = blend_src if (odds_meta and odds_meta.get("source") == "football-data.co.uk") else odds
+        odds_devig = de_vig_markets(src or {}) or {}
+        if odds_meta and odds_meta.get("derived"):
+            for mk in odds_meta["derived"]:
+                o = odds.get(mk)
+                if o and o > 1.0:
+                    odds_devig[mk] = (1.0 - s.derive_margin) / o
+
+    best = pick_best_market(analysis, odds, mode=s.pick_mode, odds_meta=odds_meta)
+
+    # checklist do trader: as evidências objetivas atrás do pick
+    rest_home = hg[0][0] if hg else None
+    rest_away = ag[0][0] if ag else None
+    checklist = trader_checklist(analysis, best, odds_devig, rest_home, rest_away)
+    analysis["checklist"] = checklist
+    if best:
+        best["grade"] = checklist["grade"]
+        best["check_score"] = checklist["score"]
     n_eff = (analysis["sample_home"] + analysis["sample_away"]) / 2
     stake = None
     if best:
@@ -388,7 +457,8 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
             stake = flat_stake(s.bankroll, s.stake_cap_pct, fraction=0.5)
 
     analysis["n_eff"] = round(n_eff, 1)
-    return {**fx, "analysis": analysis, "odds": odds, "best": best, "stake": stake}
+    return {**fx, "analysis": analysis, "odds": odds, "odds_meta": odds_meta,
+            "best": best, "stake": stake}
 
 
 @app.get("/api/day")
@@ -450,63 +520,30 @@ async def day_analysis(day: str | None = None):
         best_single = r
         break
 
-    # múltipla: montada como um apostador montaria: melhor ângulo por jogo,
-    # mercados diversificados, até 4 pernas, no máximo 2 do mesmo tipo e 1 âncora
+    # múltipla do dia: equilíbrio acerto × odd até a odd-alvo (v2.3)
     multiple = build_multiple(analyzed, s)
 
-    # modo sombra: registrar recomendações como bilhetes de auditoria (dedupe)
-    if s.shadow_mode:
-        if best_single and best_single.get("best"):
-            _log_shadow(day, best_single)
-        if multiple:
-            for leg in multiple["legs"]:
-                fx = next((r for r in analyzed if r["id"] == leg["fixture_id"]), None)
-                if fx:
-                    _log_shadow_leg(day, fx, leg)
+    # v2.3: NADA é gravado automaticamente aqui. Nem bilhete-sombra, nem
+    # histórico de jogos: registro é decisão do usuário (aba Bilhetes), e o
+    # disco do Render free só vê cache temporário com expiração.
+    feed = {}
+    if s.use_fd_odds and s.provider in ("fd", "af"):
+        try:
+            feed = odds_fd.feed_status(await odds_fd.get_events())
+        except Exception:
+            feed = {"available": False}
 
     return {
         "day": day,
         "provider": s.provider,
+        "pick_mode": s.pick_mode,
         "fixtures": analyzed,
         "errors": errors,
         "best_single": best_single["id"] if best_single else None,
         "multiple": multiple,
         "bankroll": s.bankroll,
-        "shadow_mode": s.shadow_mode,
+        "odds_feed": feed,
     }
-
-
-def _log_shadow(day: str, r: dict):
-    _insert_shadow_bet(
-        day, f'{r["home"]["name"]} x {r["away"]["name"]}',
-        r["best"]["market"], r["best"]["label"], r["best"]["odd"],
-        r["stake"]["stake"] if r.get("stake") else 0, r["best"]["prob"],
-    )
-
-
-def _log_shadow_leg(day: str, fx: dict, leg: dict):
-    _insert_shadow_bet(day, leg["match"], leg["market"], leg["label"],
-                       leg["odd"], 0, leg["prob"])
-
-
-def _insert_shadow_bet(day, label, market, selection, odd, stake, prob):
-    try:
-        with db.conn() as c:
-            exists = c.execute(
-                "SELECT 1 FROM bets WHERE shadow=1 AND match_date=? AND selection=? AND status='open'",
-                (day, selection),
-            ).fetchone()
-            if exists:
-                return
-            c.execute(
-                "INSERT INTO bets(created_at, match_date, label, market, selection, odd, stake, prob, ev, shadow) "
-                "VALUES(?,?,?,?,?,?,?,?,?,1)",
-                (dt.datetime.now().isoformat(timespec="seconds"), day, label, market,
-                 selection, odd, stake, prob,
-                 round((prob or 0) * odd - 1, 4) if prob else None),
-            )
-    except Exception:
-        pass  # sombra nunca quebra o painel
 
 
 # ------------------------------------------------------------------ bilhetes

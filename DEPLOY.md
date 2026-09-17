@@ -11,15 +11,25 @@ visualizador de arquivos). Você precisa destes arquivos:
 ```
 futanalytics/
   app/            (main.py, model.py, provider.py, db.py, joint.py,
-                   calibration.py, understat.py, backtest.py,
+                   calibration.py, understat.py, backtest.py, odds_fd.py,
                    calibration_data.json)   ← obrigatório: curvas de calibração
   static/         (index.html)
   requirements.txt
   render.yaml
 ```
 
-**NÃO suba** para o GitHub/Render (pesa no repositório e não serve lá):
-`futanalytics.db` (seu banco local) e `data_cache/` (cache de backtest, ~10 MB).
+**NÃO suba** para o GitHub/Render (pesa no repositório e não serve lá — já
+protegidos pelo `.gitignore`): `futanalytics.db` (seu banco local) e
+`data_cache/` (cache de backtest, ~10 MB).
+
+**Novidades da v2.3 no deploy:** continua zero dependência nova e zero custo
+extra no free. A única chamada externa nova é o arquivo de odds do
+football-data.co.uk (150 KB, ~2x ao dia, cacheado 12h). Se o site estiver fora
+do ar, o app usa a última cópia baixada ou segue com odds justas — o deploy e
+o painel nunca quebram por causa disso. E nada mais é gravado sozinho: nem
+bilhete-sombra, nem histórico de jogos; o único dado escrito automaticamente
+é o cache temporário das APIs (expira em horas e é limpo sozinho), que é o
+que protege suas cotas gratuitas.
 
 **Novidades da v2 no deploy:**
 - `requirements.txt` NÃO mudou: zero dependência nova, o build fica igual.
