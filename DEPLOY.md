@@ -33,11 +33,13 @@ futanalytics/
   que você abrir o app, ele pede o token (o Render mostra o valor em
   Environment Variables); o app guarda no navegador. Sem isso, qualquer pessoa
   com o link podia apagar seus bilhetes e ler suas configurações.
-- **Banco em disco persistente (`FUTA_DB`)**: o `render.yaml` aponta para
-  `/var/data/futanalytics.db`. Para isso valer, crie um **Disk** no Render
-  (Settings > Disks, 1 GB é o suficiente) montado em `/var/data`. Sem disco, o
-  banco é apagado a cada deploy — e o backup/restauração continua sendo o
-  caminho.
+- **Banco de dados (`FUTA_DB`)**: no plano **free NÃO existe disco persistente**,
+  então o banco fica na raiz do projeto e é apagado a cada deploy/reinício
+  (use o backup em JSON; veja os avisos abaixo). O `render.yaml` **não** define
+  `FUTA_DB` de propósito: apontar para `/var/data` sem disco faria o SQLite
+  falhar. Em plano **pago**, crie um **Disk** (Settings > Disks, 1 GB basta)
+  montado em `/var/data` e descomente as duas linhas de `FUTA_DB` no
+  `render.yaml` — aí o banco sobrevive a deploys.
 - O xG vem do Understat (grátis, sem chave). Nas ligas com cobertura (Premier,
   La Liga, Serie A, Bundesliga, Ligue 1) a carga inicial é rápida (1 requisição
   cacheada por liga). Fora delas o app cai no histórico de gols brutos.
@@ -80,19 +82,43 @@ futanalytics/
 2. Menu do Chrome (três pontos) > "Adicionar à tela inicial".
 3. Vira um ícone que abre como aplicativo.
 
-## Avisos do plano gratuito do Render
+## Plano gratuito do Render: o que a v3 consome (medido, não estimado)
 
-- O serviço "dorme" após 15 min sem uso; a primeira visita do dia demora
-  ~1 min para acordar. Depois fica rápido. (Isso é o Render free, não o app —
-  e acontece igual na v1 e na v2.)
-- O disco é apagado a cada deploy: as configurações voltam ao padrão e os
-  bilhetes registrados são perdidos. O token não, se estiver na variável
-  FD_TOKEN. Para o resto, use o botão "Baixar backup" em Configurações antes
-  de atualizar o código e "Restaurar" depois do deploy — o arquivo carrega
-  banca, bilhetes, CLV, modo sombra e configurações.
-- Custo da v2 comparado à v1 no free: +9 KB de arquivo estático e, no pior
-  caso (Understat fora do ar), +10 s na primeira carga antes do fallback
-  automático. Nada a mais: mesmo build, mesma RAM, mesmo cold start.
+Medições feitas no próprio projeto (Python 3.11, 6 jogos analisados por dia):
+
+| Recurso | Limite do free | Consumo da v3 | Situação |
+|---|---|---|---|
+| RAM | 512 MB | **62 MB** com o app rodando (46 MB só de import) | folga de ~8× |
+| CPU | 0,1 vCPU compartilhado | 0,3–0,5 s por dia analisado aqui (máquina rápida); no free conte 2–5 s | ok |
+| Build | 500 min/mês | `pip install -r requirements.txt` (4 pacotes, sem dependência nova) | ~1–2 min por deploy |
+| Instância | 750 h/mês **por workspace** | dorme após 15 min sem acesso; uso real fica bem abaixo | ok — **desde que você não use "pinger" para manter acordado** |
+| Disco | **não existe no free** | banco + cache na raiz do projeto, apagados a cada deploy/reinício | ver avisos |
+
+O que isso significa na prática:
+
+- **O app não estoura os limites do free.** O peso é o mesmo da v2: mesmo
+  build, mesma RAM, cold start igual. A v3 trocou "mais modelo" por "mais
+  matemática de preço e registro" — tudo em cima do que já existia.
+- **Não use serviço de "keep-alive"/pinger.** Manter o serviço acordado 24/7
+  consome as 750 h do workspace; um segundo serviço acordado estoura o mês e o
+  Render **suspende todos os serviços free** até o dia 1. Deixe dormir.
+- **O disco é apagado a cada deploy e a cada reinício da instância:** as
+  configurações voltam ao padrão e os bilhetes sombra/registrados se perdem.
+  Os tokens (FD_TOKEN/AF_KEY/APP_TOKEN) não, porque são variáveis de ambiente.
+  Antes de atualizar o código, use **"Baixar backup"** em Configurações e
+  **"Restaurar"** depois do deploy — o JSON carrega banca, bilhetes, CLV, modo
+  sombra e configurações. Faça backup com frequência; é o único seguro no free.
+- **Primeira carga de cada "acordar" pode ser lenta** (30–60 s do cold start +
+  a busca de xG no Understat, que fica em cache no banco — cache que o
+  spin-down apaga). O app cai no histórico de gols se o Understat não responder.
+- **O backtest NÃO roda no Render** (nem deve): é ferramenta de PC. Rodar
+  `python -m app.backtest` no free levaria muitos minutos de CPU e pode ser
+  interrompido no meio.
+- **Dado operacional — o CI pegou um bug que derrubava a análise no Render:** o
+  `league_xg_priors` não aceitava a tupla de 7 campos que o Understat devolve
+  (`ValueError: too many values to unpack`), e isso só aparecia **com internet
+  disponível** — no seu PC com Understat bloqueado ele passava batido. Corrigido
+  nesta versão, com teste de regressão (`tests/test_model.py`).
 
 ## Alternativa sem GitHub: PythonAnywhere
 

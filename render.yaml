@@ -12,6 +12,10 @@ services:
       # sem ele o app fica ABERTO e qualquer pessoa com o link pode apagar bilhetes.
       - key: APP_TOKEN
         generateValue: true
-      # caminho do banco dentro do disco persistente (opcional; veja o DEPLOY.md)
-      - key: FUTA_DB
-        value: /var/data/futanalytics.db
+      # NÃO defina FUTA_DB no plano free: o Render free NÃO tem disco persistente,
+      # então /var/data não existe e o banco não pode ser criado ali (o app tem
+      # fallback, mas o certo é não apontar para lá). O banco fica na raiz do
+      # projeto e é apagado a cada deploy/spin-down — use o backup em JSON.
+      # Em plano PAGO: crie um Disk montado em /var/data e descomente as 2 linhas.
+      # - key: FUTA_DB
+      #   value: /var/data/futanalytics.db

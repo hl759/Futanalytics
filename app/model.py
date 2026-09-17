@@ -197,7 +197,9 @@ def league_xg_priors(games):
     for g in games:
         if len(g) < 6 or g[4] is None or g[5] is None:
             continue
-        _days, is_home, _gf, _ga, xgf, xga = g
+        # g[:6]: o provedor de xG anexa o nome do adversário no fim da tupla
+        # (ver understat.games_for_team) — cortar aqui evita ValueError
+        _days, is_home, _gf, _ga, xgf, xga = g[:6]
         if is_home:
             hg += xgf
             nh += 1

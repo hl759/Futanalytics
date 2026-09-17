@@ -147,7 +147,7 @@ devig e correlação intra-rodada. A aba **Auditoria** do app mostra o último
 | Variável | Para que serve |
 |---|---|
 | `APP_TOKEN` | protege `/api/*`: sem ele, qualquer pessoa com o link pode apagar seus bilhetes. Com ele, o app pede o token uma vez e guarda no navegador. |
-| `FUTA_DB` | caminho do SQLite (use disco persistente no deploy) |
+| `FUTA_DB` | caminho do SQLite (disco persistente só existe em plano pago; no free o banco é apagado a cada deploy — veja `DEPLOY.md`) |
 | `FD_TOKEN` | token do football-data.org |
 | `AF_KEY` | chave da API-Football (odds reais) |
 | `FUTA_DATA_DIR` | espelho local de CSVs do football-data.co.uk para o backtest offline |

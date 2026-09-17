@@ -15,12 +15,38 @@ import datetime as dt
 import json
 import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
-# Caminho do banco: por padrão na raiz do projeto (``futanalytics.db``), mas
-# ``FUTA_DB`` permite apontar para disco persistente (ou para um banco de teste).
-DB_PATH = Path(os.environ.get("FUTA_DB") or Path(__file__).resolve().parent.parent / "futanalytics.db")
+
+def _default_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "futanalytics.db"
+
+
+def _resolve_db_path() -> Path:
+    """Caminho do banco: ``FUTA_DB`` quando utilizável, senão o padrão do projeto.
+
+    O **Render free não tem disco persistente**: apontar ``FUTA_DB`` para
+    ``/var/data`` (que só existe com um Disk de plano pago) faz o SQLite falhar
+    ao criar o arquivo e derruba o app inteiro. Aqui a variável é validada antes
+    de virar caminho: se o diretório não puder ser criado, usamos o banco padrão
+    na raiz do projeto e avisamos no stderr — app no ar é melhor que app morto.
+    """
+    env = os.environ.get("FUTA_DB")
+    if not env:
+        return _default_path()
+    p = Path(env)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"[db] FUTA_DB={env} inutilizável ({e}); usando {_default_path()}",
+              file=sys.stderr)
+        return _default_path()
+    return p
+
+
+DB_PATH = _resolve_db_path()
 
 
 def conn() -> sqlite3.Connection:

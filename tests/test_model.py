@@ -109,3 +109,15 @@ def test_amostra_insuficiente_nao_quebra():
     a = analyze_match(magra, magra)
     assert a["markets"]["home"] + a["markets"]["draw"] + a["markets"]["away"] == pytest.approx(1.0, abs=1e-6)
     assert 0.0 <= a["confidence"] <= 1.0
+
+
+def test_league_xg_priors_aceita_tupla_com_contexto():
+    """Regressão: o provedor de xG anexa o adversário no fim da tupla (7 campos)."""
+    from app.model import league_xg_priors
+    games = [
+        [5, True, 2, 1, 1.4, 0.9, "Rival A"],
+        [9, False, 1, 1, 0.8, 1.2, "Rival B"],
+        [12, True, 0, 0, None, None, "Rival C"],
+    ]
+    h, a = league_xg_priors(games)
+    assert h > 0 and a > 0
