@@ -103,7 +103,7 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
 <main>
   <section id="tab-day">
     <h2>Painel do dia</h2>
-    <div class="sub">Apenas mercados de gols (Over/Under/BTTS + totais por time). Distribuição de placares, ajuste por adversário, tendências e H2H em cada card. O app aponta a linha <b>mais provável</b> de cada jogo e monta a múltipla com as mais seguras do dia.</div>
+    <div class="sub">Apenas mercados de gols (Over/Under/BTTS + totais por time). Seleção por <b>equilíbrio acerto × odd</b> com <b>odds reais grátis</b> (Bet365/Pinnacle nas ligas europeias; demais linhas derivadas do consenso — selo <span class="pill amber" style="font-size:10px">derivada</span>) e <b>verificação do trader</b> em cada card. Nada é gravado sozinho: bilhetes só entram quando você clica em registrar.</div>
     <div class="datebar">
       <input type="date" id="dayPick">
       <button class="btn ghost" id="reload">Atualizar análise</button>
@@ -158,24 +158,35 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <div class="field">
           <label>Como o app escolhe</label>
           <select id="sPickMode">
-            <option value="prob">Mais provável (só gols · recomendado)</option>
+            <option value="balanced">Equilíbrio acerto × odd (recomendado)</option>
+            <option value="prob">Só o mais provável</option>
             <option value="ev">Valor esperado (EV, para traders)</option>
+          </select>
+        </div>
+        <div class="field"><label>Odd-alvo da múltipla (recomendado 2.5 a 3.0 · o app para de adicionar pernas ao atingir)</label><input id="sTarget" type="number" step="0.1" min="1.6" max="8"></div>
+        <div class="field"><label>Odd mínima de uma perna (abaixo disso só entra sem alternativa · recomendado 1.12)</label><input id="sMinLeg" type="number" step="0.02" min="1.02" max="1.6"></div>
+        <div class="field">
+          <label>Selo mínimo das pernas da múltipla (verificação do trader)</label>
+          <select id="sMinGrade">
+            <option value="B">Selo A ou B (recomendado · perna C NUNCA entra)</option>
+            <option value="A">Só selo A (ultra criterioso · terá dias sem múltipla)</option>
+            <option value="C">Sem filtro de selo (aceita perna C)</option>
           </select>
         </div>
         <div class="field"><label>EV mínimo para recomendar (% · só usado no modo "valor esperado")</label><input id="sEv" type="number" step="0.5"></div>
         <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado · recomendado 25%)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
         <div class="field"><label>Peso do xG sobre gols brutos (% · recomendado 65%; ligas sem xG usam gols + calibração)</label><input id="sXg" type="number" step="5" min="0" max="100"></div>
         <div class="field">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="sCal" style="width:auto"> Calibrar probabilidades (curvas treinadas em temporadas passadas)</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="sFdOdds" style="width:auto"> Odds reais grátis (Bet365/Pinnacle via football-data.co.uk · recomendado)</label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sCal" style="width:auto"> Calibrar probabilidades (curvas treinadas em temporadas passadas)</label>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sKellyUnc" style="width:auto"> Kelly com desconto de incerteza (stake menor quando a amostra é curta)</label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sShadow" style="width:auto"> Modo sombra (registra toda recomendação como bilhete de auditoria, sem tocar a banca)</label>
         </div>
         <button class="btn" id="saveBank">Salvar gestão</button>
       </div>
     </div>
     <div class="card" style="margin-top:16px">
       <h3 style="margin-bottom:8px">Backup e restauração</h3>
-      <div class="small" style="margin-bottom:12px">O Render free apaga o disco a cada deploy: <b>baixe um backup antes de atualizar o código</b> e restaure depois. O arquivo inclui banca, bilhetes, CLV, modo sombra e configurações — inclusive suas chaves de API, então guarde-o com cuidado. (No seu computador o banco é local e nada se perde; isso é para quem usa via Render.)</div>
+      <div class="small" style="margin-bottom:12px">O Render free apaga o disco a cada deploy: <b>baixe um backup antes de atualizar o código</b> e restaure depois. O arquivo inclui banca, bilhetes, CLV e configurações — inclusive suas chaves de API, então guarde-o com cuidado. (No seu computador o banco é local e nada se perde; isso é para quem usa via Render.)</div>
       <div class="row" style="gap:10px">
         <button class="btn" id="btnBackup">⬇ Baixar backup</button>
         <button class="btn ghost" id="btnRestore">⬆ Restaurar de um arquivo…</button>
@@ -225,10 +236,17 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         <li><b>Calibração isotônica</b>: as probabilidades do modelo são corrigidas por curvas treinadas em temporadas passadas antes de virar EV. Na faixa onde estão 92% dos jogos, o desvio entre probabilidade prevista e frequência real caiu de ~8 pontos para ~1-2 pontos.</li>
         <li><b>Kelly com desconto de incerteza</b>: a stake usa a probabilidade descontada do erro amostral — amostra curta empurra a stake para baixo automaticamente.</li>
       </ul>
-      <p><b>Resultado honesto do backtest (temporada 2025/26 como teste):</b> o modelo calibrado parou de fabricar falso valor — com peso de mercado 25% e EV mínimo de 3%, a produção passou a recomendar pouquíssimas apostas, o que é o comportamento correto quando não há edge claro. Os picks só-modelo ainda perdem para o mercado no agregado. A conclusão operacional: use o painel como filtro de disciplina e registro (modo sombra + CLV), teste em paralelo 300+ apostas e só considere dinheiro real com CLV positivo consistente.</p>
+      <p><b>Resultado honesto do backtest (temporada 2025/26 como teste):</b> o modelo calibrado parou de fabricar falso valor — com peso de mercado 25% e EV mínimo de 3%, a produção passou a recomendar pouquíssimas apostas, o que é o comportamento correto quando não há edge claro. Os picks só-modelo ainda perdem para o mercado no agregado. A conclusão operacional: use o painel como filtro de disciplina e registro (bilhetes + CLV, sempre manuais), teste em paralelo 300+ apostas e só considere dinheiro real com CLV positivo consistente.</p>
       <h3>9. Modo "mais provável" — a filosofia atual do app (v2.1)</h3>
       <p>A partir da v2.1 o app foca <b>apenas em mercados de gols</b> (Over/Under e BTTS) e escolhe em cada jogo <b>o desfecho mais provável</b> dentro de uma janela saudável (probabilidade entre 60% e 95%), com preferência por linhas Over quando há empate técnico — incluindo o clássico Over 1.5. Não há mais 1X2 nem dupla chance nas recomendações, e o valor esperado vira apenas informação, não critério. A múltipla do dia junta a linha mais segura de cada jogo, ordenada pela probabilidade, com stake fixa sugerida (metade do seu teto por aposta). Se você prefere caçar valor esperado como trader, troque o modo em Configurações — mas os dois modos continuam 100% em mercados de gols.</p>
       <p><b>Como validar você mesmo:</b> <code>python -m app.backtest --fit-calibration --report backtest_report.md</code> regenera todo o relatório (Brier/LogLoss vs. mercado, calibração, teste de alfa, ROI e CLV das estratégias).</p>
+      <h3>10. v2.3 "Trader Free" — odds reais grátis, equilíbrio e verificação</h3>
+      <p><b>Odds de verdade sem pagar nada.</b> Em 2026 não existe mais API de odds de futebol gratuita (a The Odds API tirou o futebol do plano free; a API-Football grátis só tem temporadas antigas). O que resta grátis, sem chave e sem limite é o arquivo público do football-data.co.uk com as odds das próximas rodadas das ligas europeias: 1X2 e Over/Under 2.5 da <b>Bet365 e da Pinnacle</b> — a Pinnacle é a casa mais "sharp" do mundo, a referência de probabilidade real dos traders. O app baixa esse arquivo ~2 vezes ao dia (150 KB), casa com os jogos do painel por data e nome, e exibe a melhor odd real por mercado com o selo <b>real</b>.</p>
+      <p><b>Linhas derivadas do consenso.</b> E Over 1.5, BTTS, totais por time? Não existem no arquivo gratuito. Em vez de inventar, o app faz o que as próprias casas fazem: <b>inversão Poisson</b> — encontra os gols esperados implícitos no 1X2 + Over 2.5 do mercado (Bet365/Pinnacle, sem a margem) e projeta as demais linhas com a mesma matriz Dixon-Coles do motor, descontando uma margem padrão. Essas vêm com selo <b>derivada</b>: estimativa boa, mas não é preço de casa — confira na sua antes de confirmar. Jogos fora das ligas cobertas (Brasileirão, Champions) seguem com a <b>odd justa do modelo</b>, sem disfarce.</p>
+      <p><b>Equilíbrio acerto × odd.</b> Uma perna de 92% @1.04 estraga sua múltipla: risco inteiro por 4 centavos. Uma de 75% @1.55 às vezes é muito melhor negócio. O modo padrão "Equilíbrio acerto × odd" escolhe, em cada jogo, a linha mais segura cujo preço paga o risco (probabilidade manda, preço decide o desempate), evita odds abaixo de ~1.12 e monta a múltipla adicionando pernas da mais segura para a menos segura <b>só até atingir a odd-alvo</b> (padrão ~2.8): perna além do alvo só derruba sua taxa de acerto, não melhora retorno.</p>
+      <p><b>Verificação do trader (selo A/B/C).</b> Antes de cada pick o app passa pelo checklist que um profissional passa: amostra suficiente, insumo (xG/modelo conjunto), concordância do modelo com o mercado (modelo discordar muito do mercado sem motivo é sinal amarelo, não verde), descanso dos dois times, tendência recente alinhada com a perna, histórico do confronto e perfil da liga. A nota 0–10 vira o selo: A = evidências alinhadas, B = vale com cautela, C = o trader passa ou reduz. O selo não é promessa de green — é a soma das evidências disponíveis. A conferência humana de desfalques e escalações continua sendo sua e insubstituível.</p>
+      <p><b>Múltipla com régua de selo (padrão: nunca C).</b> A múltipla do dia só aceita pernas com selo A ou B da verificação — perna selo C <b>não entra em hipótese alguma</b> (a régua é configurável em Configurações). O selo é calculado para cada ângulo candidato de cada jogo, não só para o pick principal. Consequência deliberada: haverá dias sem múltipla nenhuma. É assim que um profissional opera: uma perna fraca derruba a combinação inteira, e a taxa de acerto de 4 pernas é a multiplicação das quatro — uma única 50/50 no meio transforma uma múltipla de 60% em uma de 30%. Em dia limpo, a múltipla aparece; em dia sujo, o app te protege de você mesmo.</p>
+      <p><b>Nada é gravado sozinho.</b> Bilhetes, resultados e CLV só existem se você registrar com um clique consciente. O único dado escrito automaticamente é o cache temporário das APIs (expira em horas e é limpo sozinho): sem ele, as cotas gratuitas das fontes de dados estourariam e o app pararia de funcionar. No Render free (disco apagado a cada deploy) o fluxo é: jogou o dia, baixou o backup em Configurações, vai atualizar o app → restaura o backup depois do deploy. Contas, senhas e jogos passados ficam com você, no seu arquivo — não no servidor.</p>
     </div>
   </section>
 </main>
@@ -268,8 +286,11 @@ async function loadSettings(){
   $('#sXg').value=Math.round((SETTINGS.xg_weight??0.65)*100);
   $('#sCal').checked=SETTINGS.use_calibration!==false;
   $('#sKellyUnc').checked=SETTINGS.kelly_uncertainty!==false;
-  $('#sShadow').checked=!!SETTINGS.shadow_mode;
-  $('#sPickMode').value=SETTINGS.pick_mode||'prob';
+  $('#sFdOdds').checked=SETTINGS.use_fd_odds!==false;
+  $('#sPickMode').value=SETTINGS.pick_mode||'balanced';
+  $('#sTarget').value=SETTINGS.target_parlay_odd||2.8;
+  $('#sMinLeg').value=SETTINGS.min_leg_odd||1.12;
+  $('#sMinGrade').value=SETTINGS.multiple_min_grade||'B';
 }
 $('#saveProvider').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -304,7 +325,11 @@ $('#saveBank').onclick=async()=>{
       xg_weight:Math.max(0,Math.min(1,+$('#sXg').value/100)),
       use_calibration:$('#sCal').checked,
       kelly_uncertainty:$('#sKellyUnc').checked,
-      shadow_mode:$('#sShadow').checked,pick_mode:$('#sPickMode').value})});
+      use_fd_odds:$('#sFdOdds').checked,
+      target_parlay_odd:Math.max(1.6,Math.min(8,+$('#sTarget').value||2.8)),
+      min_leg_odd:Math.max(1.02,Math.min(1.6,+$('#sMinLeg').value||1.12)),
+      multiple_min_grade:$('#sMinGrade').value,
+      pick_mode:$('#sPickMode').value})});
   toast('Gestão de banca salva');await loadSettings();loadDay();
 };
 
@@ -355,6 +380,14 @@ $('#fileRestore').onchange=async(e)=>{
 
 function hhmm(iso){try{const d=new Date(iso);return d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
 
+function oddTag(fx,k){
+  if(!fx.odds_meta)return '';
+  const src=(fx.odds_meta.real||[]).includes(k)?'real':((fx.odds_meta.derived||[]).includes(k)?'derived':'');
+  if(src==='real')return ' <span class="pill green" style="font-size:9px;padding:1px 6px" title="Odd REAL de casa de apostas (Bet365/Pinnacle)">real</span>';
+  if(src==='derived')return ' <span class="pill amber" style="font-size:9px;padding:1px 6px" title="Odd derivada do consenso do mercado (inversão Poisson) — estimativa boa, não preço de casa">derivada</span>';
+  return '';
+}
+
 function marketRows(fx){
   const mk=fx.analysis.markets, fo=fx.analysis.fair_odds, odds=fx.odds||{};
   const order=['over_1.5','over_2.5','under_2.5','btts_yes','btts_no','over_3.5','home','draw','away','dc_1x','dc_x2'];
@@ -363,7 +396,7 @@ function marketRows(fx){
     const o=odds[k], p=mk[k];
     const ev=o?(p*o-1):null;
     const evCell=ev===null?'<span class="small">—</span>':`<span style="color:${ev>0?'var(--green)':'var(--red)'}">${(ev*100).toFixed(1)}%</span>`;
-    return `<tr><td>${L[k]}</td><td class="num">${pct(p)}</td><td class="num">${fo[k].toFixed(2)}</td><td class="num">${o?o.toFixed(2):'—'}</td><td class="num">${evCell}</td></tr>`;
+    return `<tr><td>${L[k]}${oddTag(fx,k)}</td><td class="num">${pct(p)}</td><td class="num">${fo[k].toFixed(2)}</td><td class="num">${o?o.toFixed(2):'—'}</td><td class="num">${evCell}</td></tr>`;
   }).join('');
 }
 
@@ -397,14 +430,31 @@ function goalsBlock(a){
   </div>`;
 }
 
+function gradePill(g){
+  const map={A:['green','Verificação forte: evidências alinhadas (não é garantia)'],B:['blue','Verificação média: vale com cautela'],C:['red','Verificação fraca: o trader passa ou reduz muito a stake']};
+  if(!g||!map[g])return '';
+  return `<span class="pill ${map[g][0]}" title="${map[g][1]}">selo ${g}</span>`;
+}
+
+function checklistBlock(a){
+  const c=a.checklist;if(!c||!c.items||!c.items.length)return '';
+  const ic={ok:'<span style="color:var(--green);font-weight:800">✓</span>',warn:'<span style="color:var(--amber);font-weight:800">~</span>',bad:'<span style="color:var(--red);font-weight:800">✗</span>'};
+  return `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">
+    <div class="small" style="margin-bottom:6px"><b>Verificação do trader</b> · nota ${c.score.toFixed(1)}/10 ${gradePill(c.grade)}</div>
+    ${c.items.map(i=>`<div class="stat small" style="display:flex;gap:7px;margin-top:3px"><span>${ic[i.state]||''}</span><span><b>${i.item}</b>: ${i.detail}</span></div>`).join('')}
+  </div>`;
+}
+
 function renderFixture(fx,isBest){
   const a=fx.analysis,b=fx.best;
-  const evTag=b?`<span class="pill green">prob ${pct(b.prob)}</span>${b.ev!==null?` <span class="pill ${b.ev>0?'green':'red'}" title="informativo">EV ${(b.ev*100).toFixed(1)}%</span>`:''}`:'';
+  const feeds={'football-data.co.uk':'Bet365/Pinnacle','API-Football':'odds reais','demo':'demo'};
+  const feedTag=fx.odds_meta?`<span class="pill ${fx.odds_meta.source==='demo'?'gray':'green'}" title="Fonte das odds deste jogo">${feeds[fx.odds_meta.source]||'odds'}</span>`:'<span class="pill gray" title="Sem preço de mercado: a odd exibida é a justa do modelo">odd justa</span>';
+  const evTag=b?`${gradePill(b.grade)} <span class="pill green">prob ${pct(b.prob)}</span>${b.ev!==null?` <span class="pill ${b.ev>0?'green':'red'}" title="informativo">EV ${(b.ev*100).toFixed(1)}%</span>`:''}`:'';
   const pick=b?`
     <div class="bigpick">
       <div class="lab">${isBest?'⭐ Aposta do dia':'Melhor mercado'}</div>
-      <div class="val">${b.label} <span class="oddtag">@${b.odd.toFixed(2)}</span></div>
-      <div class="small">${b.odd_is_fair?'probabilidade do modelo':'probabilidade (modelo + mercado)'} ${pct(b.prob)} ${b.odd_is_fair?'(odd justa, sem odds de mercado)':''}</div>
+      <div class="val">${b.label} <span class="oddtag">@${b.odd.toFixed(2)}</span>${b.odd_kind==='derived'?' <span class="pill amber" style="font-size:9px;padding:1px 6px">derivada</span>':''}${b.odd_kind==='real'?' <span class="pill green" style="font-size:9px;padding:1px 6px">real</span>':''}</div>
+      <div class="small">${b.odd_is_fair?'probabilidade do modelo':'probabilidade (modelo + mercado)'} ${pct(b.prob)} ${b.odd_is_fair?'(odd justa, sem odds de mercado)':''}${b.check_score!==undefined&&b.check_score!==null?` · verificação ${b.check_score}/10`:''}</div>
       <div class="bar"><i style="width:${(b.prob*100).toFixed(0)}%"></i></div>
       <div class="row" style="margin-top:10px">
         ${evTag}
@@ -419,6 +469,7 @@ function renderFixture(fx,isBest){
       <span class="teams">${fx.home.name} <span style="color:var(--mut)">x</span> ${fx.away.name}</span>
       ${a.xg_used?'<span class="pill green" title="Histórico calculado com gols esperados (xG) do Understat">xG</span>':''}
       ${a.calibrated?'<span class="pill amber" title="Probabilidades corrigidas por curvas de calibração treinadas em temporadas passadas">calibrado</span>':''}
+      ${feedTag}
       <span class="spacer"></span>
       <span class="small">${hhmm(fx.kickoff_utc)} · confiança do modelo ${pct(a.confidence)}</span>
     </div>
@@ -429,6 +480,7 @@ function renderFixture(fx,isBest){
         <div class="stat">Placares prováveis: ${a.top_scores.map(s=>`<b>${s.score}</b> (${pct(s.prob)})`).join(' · ')}</div>
         <div class="stat small" style="margin-top:6px">Amostra: ${a.sample_home} jogos (casa) · ${a.sample_away} (fora), ponderada por recência</div>
         ${goalsBlock(a)}
+        ${checklistBlock(a)}
       </div>
       <div>${pick}</div>
       <div style="overflow-x:auto"><table>
@@ -440,14 +492,23 @@ function renderFixture(fx,isBest){
 }
 
 function renderMultiple(m){
-  if(!m)return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem jogos suficientes para montar uma múltipla com mercados variados hoje.</div></div>`;
+  if(!m){
+    const mg=DAY&&(DAY.multiple_min_grade||'B');
+    return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem múltipla hoje${mg!=='C'?`: nenhum conjunto de pernas alcançou o selo mínimo <b>${mg}</b> da verificação do trader (${mg==='B'?'só selo A ou B entram':'só selo A entra'})`:''}. Disciplina de banca: dia de apostas individuais criteriosas ou de ficar de fora — múltipla forçada é presente para a casa.</div></div>`;
+  }
+  const mg=m.min_grade||'B';
+  const kindPill=k=>k==='real'?'<span class="pill green" style="font-size:9px;padding:1px 6px" title="Odd real de casa">real</span>':(k==='derived'?'<span class="pill amber" style="font-size:9px;padding:1px 6px" title="Odd derivada do consenso">derivada</span>':'<span class="pill gray" style="font-size:9px;padding:1px 6px" title="Odd justa do modelo (sem mercado)">justa</span>');
+  const legGradePill=g=>g?`<span class="pill ${{A:'green',B:'blue',C:'red'}[g]||'gray'}" style="font-size:9px;padding:1px 6px" title="Verificação do trader da perna">${g}</span>`:'';
   return `<div class="card" style="border-color:var(--amber)">
-    <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3><span class="spacer"></span>
-      <span class="pill amber">odd combinada ${m.combined_odd.toFixed(2)}</span>
+    <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3>
+      ${mg!=='C'?`<span class="pill green" title="Todas as pernas passaram na verificação do trader com selo no mínimo ${mg}. Perna com selo C não entra na múltipla.">só selo ${mg==='B'?'A/B':'A'}</span>`:''}
+      <span class="spacer"></span>
+      <span class="pill amber">odd combinada ${m.combined_odd.toFixed(2)}${m.target_odd?` <span class="small" style="font-weight:400">(alvo ${m.target_odd.toFixed(2)})</span>`:''}</span>
       <span class="pill ${m.ev==null?'gray':(m.ev>0?'green':'red')}">EV ${m.ev==null?'—':(m.ev*100).toFixed(1)+'%'}</span>
+      ${m.real_legs!==undefined?`<span class="pill ${m.real_legs===m.legs.length?'green':(m.real_legs?'blue':'gray')}" title="Quantas pernas têm preço REAL de casa de apostas; derivadas vêm do consenso; justas são do modelo">${m.real_legs}/${m.legs.length} odds reais</span>`:''}
     </div>
     <div style="margin:10px 0">
-      ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span>${l.anchor?'<span class="pill gray">âncora</span>':''}<span class="oddtag">@${l.odd.toFixed(2)}</span><span class="small">${pct(l.prob)}</span></div>`).join('')}
+      ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span>${l.anchor?'<span class="pill gray">âncora</span>':''}<span class="oddtag">@${l.odd.toFixed(2)}</span>${kindPill(l.odd_kind)}${legGradePill(l.grade)}<span class="small">${pct(l.prob)}</span></div>`).join('')}
     </div>
     <div class="row">
       <span class="stat">Probabilidade combinada: <b>${pct(m.combined_prob)}</b></span>
@@ -479,6 +540,11 @@ async function loadDay(){
     }
   }
   $('#provTag').textContent={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'';
+  if(DAY.odds_feed&&DAY.odds_feed.available){
+    $('#provTag').textContent+=` · odds reais: Bet365/Pinnacle (${DAY.odds_feed.n_events} jogos no arquivo)`;
+  }else if(DAY.provider!=='demo'){
+    $('#provTag').textContent+=' · odds reais indisponíveis hoje (odd justa do modelo)';
+  }
     let html='';
     if(DAY.provider==='demo')html+=`<div class="warn">Você está no modo demonstração com dados simulados. Configure uma chave gratuita em Configurações para analisar jogos reais do dia.</div>`;
     if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;

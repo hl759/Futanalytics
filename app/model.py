@@ -460,54 +460,127 @@ MAX_PER_FAMILY = 2
 ANCHOR_ODD = 1.20
 ANCHOR_MIN_PROB = 0.72
 
+# v2.3 — equilíbrio acerto × odd (o que um trader olha de verdade).
+# prob diz a chance; a odd diz se vale o risco. O score abaixo penaliza odd
+# micra (risco acumulado por retorno irrisório) e premia a faixa jogável
+# ~1.20–1.70, sem abandonar a segurança: prob^1.25 manda mais que o preço.
+BALANCED_PROB_FLOOR = 0.58     # abaixo disso não é perna, é loteria disfarçada
+MIN_ODD_USEFUL = 1.12          # odd menor mal paga o risco de fila
+TARGET_PARLAY_ODD = 2.8        # alvo padrão da múltipla (configurável)
+GRADE_ORDER = {"A": 3, "B": 2, "C": 1}
 
-def candidate_markets(analysis: dict, odds: dict | None):
-    """Ângulos candidatos de um jogo, do MAIS PROVÁVEL para o menos provável.
 
-    v2.1: apenas mercados de gols e BTTS; probabilidade manda, EV é informativo.
+def grade_allowed(grade: str | None, minimum: str) -> bool:
+    """A múltipla honra a régua: com mínimo "B" (padrão), perna C NUNCA entra."""
+    return GRADE_ORDER.get(grade or "C", 1) >= GRADE_ORDER.get((minimum or "B").upper(), 2)
+
+
+def leg_value_score(prob: float, odd: float | None) -> float:
+    """Score de equilíbrio acerto × odd de uma perna (quanto maior, melhor)."""
+    if odd is None or odd <= 1.0:
+        return prob
+    return (prob ** 1.25) * ((1.0 - 1.0 / odd) ** 0.60)
+
+
+def candidate_markets(analysis: dict, odds: dict | None, mode: str = "prob",
+                      odds_meta: dict | None = None):
+    """Ângulos candidatos de um jogo, ordenados pelo critério ativo.
+
+    v2.3: mode="balanced" ordena por equilíbrio acerto × odd (padrão quando
+    há preço real ou derivado); "prob" = só o mais provável; "ev" = valor
+    esperado. Cada candidato carrega odd_kind (real|derived|fair) — você
+    sempre sabe de onde veio o preço que está olhando.
     """
     probs = analysis["markets"]
     odds = odds or {}
+    real_set = set((odds_meta or {}).get("real") or [])
+    derived_set = set((odds_meta or {}).get("derived") or [])
     out = []
     for mk in CANDIDATE_MARKETS:
         p = probs.get(mk)
         if p is None:
             continue
+        has_price = mk in odds
         odd = odds.get(mk) or round(1.0 / p, 2)
-        ev = round(p * odds[mk] - 1, 4) if odds.get(mk) else None
+        ev = round(p * odds[mk] - 1, 4) if has_price else None
+        if mk in real_set or (has_price and not derived_set):
+            kind = "real"
+        elif mk in derived_set:
+            kind = "derived"
+        else:
+            kind = "fair"
         out.append({
             "market": mk, "label": MARKET_LABELS[mk],
             "prob": round(p, 4), "odd": round(odd, 2),
             "ev": ev,
             "score": round(p, 4),
+            "value": round(leg_value_score(p, odd if has_price else None), 4),
+            "odd_kind": kind,
             "family": MARKET_FAMILY[mk],
         })
-    # mais provável primeiro; desempate pela ordem de preferência (over primeiro)
     pref = {mk: i for i, mk in enumerate(GOAL_PICK_MARKETS)}
-    out.sort(key=lambda c: (-c["prob"], pref.get(c["market"], 99)))
+    if mode == "balanced" and odds:
+        # equilíbrio primeiro; desempata por probabilidade e preferência over
+        out.sort(key=lambda c: (-c["value"], -c["prob"], pref.get(c["market"], 99)))
+    else:
+        # mais provável primeiro; desempate pela ordem de preferência (over primeiro)
+        out.sort(key=lambda c: (-c["prob"], pref.get(c["market"], 99)))
     return [c for c in out if c["prob"] >= 0.40]
 
 
 def build_multiple(analyzed: list, settings) -> dict | None:
-    """Múltipla do dia no estilo 'linha mais segura de cada jogo' (v2.1).
+    """Múltipla do dia — equilíbrio acerto × odd, alvo de odd e selo A/B (v2.3).
 
-    Uma perna por jogo = o mercado de gols MAIS PROVÁVEL daquele jogo
-    (pode repetir: se Over 1.5 é o mais seguro em todos, a múltipla é
-    toda de Over 1.5 — exatamente a dinâmica clássica). Pernas ordenadas
-    pela probabilidade, até MAX_LEGS, cada uma acima de PICK_MIN_PROB.
+    Como um trader monta: uma perna por jogo, escolhida pelo melhor
+    EQUILÍBRIO (prob alta, odd que pague o risco), SEMPRE com selo da
+    verificação do trader no mínimo "B" (padrão) — perna com selo C não
+    entra na múltipla em hipótese alguma; se nenhum ângulo do jogo passa
+    na régua, o jogo fica de fora. Pernas adicionadas da mais segura para
+    a menos segura ATÉ atingir a odd-alvo (padrão ~2.8) ou o teto de
+    MAX_LEGS. Melhor sem múltipla no dia do que múltipla com perna fraca:
+    cada perna C que entra derruba a taxa de acerto da combinação inteira.
     """
+    mode = getattr(settings, "pick_mode", "prob")
+    target = max(1.6, min(getattr(settings, "target_parlay_odd", TARGET_PARLAY_ODD) or TARGET_PARLAY_ODD, 8.0))
+    leg_min = max(1.05, getattr(settings, "min_leg_odd", MIN_ODD_USEFUL) or MIN_ODD_USEFUL)
+    min_grade = getattr(settings, "multiple_min_grade", "B") or "B"
+
     per_match = []
     for r in analyzed:
-        cands = [c for c in candidate_markets(r["analysis"], r.get("odds"))
-                 if c["prob"] >= PICK_MIN_PROB]
-        if cands:
-            per_match.append((r, cands[0]))
-    per_match.sort(key=lambda rc: -rc[1]["prob"])
+        leg_grades = r["analysis"].get("leg_grades") or {}
+        cands = [c for c in candidate_markets(r["analysis"], r.get("odds"), mode=mode,
+                                              odds_meta=r.get("odds_meta"))
+                 if c["prob"] >= (BALANCED_PROB_FLOOR if mode == "balanced" else PICK_MIN_PROB)]
+        # régua de selo: filtra ANTES de escolher a perna do jogo
+        cands = [c for c in cands
+                 if grade_allowed((leg_grades.get(c["market"]) or {}).get("grade"), min_grade)]
+        if not cands:
+            continue
+        best = cands[0]
+        # se a perna-cabeça tem odd micra, tenta a próxima com preço útil
+        if mode == "balanced" and best["odd"] < leg_min:
+            alt = next((c for c in cands[1:]
+                        if c["odd"] >= leg_min and c["prob"] >= BALANCED_PROB_FLOOR), None)
+            if alt:
+                best = alt
+        best["grade"] = (leg_grades.get(best["market"]) or {}).get("grade")
+        per_match.append((r, best))
+
+    if mode == "balanced":
+        per_match.sort(key=lambda rc: -rc[1]["value"])
+    else:
+        per_match.sort(key=lambda rc: -rc[1]["prob"])
 
     legs = []
+    comb_odd = 1.0
     for r, c in per_match:
         if len(legs) >= MAX_LEGS:
             break
+        if mode == "balanced":
+            # para no momento em que a odd-alvo já foi alcançada: perna extra
+            # só derruba a taxa de acerto sem melhorar o preço de verdade
+            if len(legs) >= 2 and comb_odd >= target:
+                break
         legs.append({
             "fixture_id": r["id"],
             "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
@@ -518,23 +591,26 @@ def build_multiple(analyzed: list, settings) -> dict | None:
             "prob": c["prob"],
             "odd": c["odd"],
             "ev": c["ev"],
+            "value": c.get("value"),
+            "odd_kind": c.get("odd_kind", "fair"),
+            "grade": c.get("grade"),
             "anchor": c["odd"] < ANCHOR_ODD,
             "_n_eff": r["analysis"].get("n_eff", 12.0),
         })
+        comb_odd *= c["odd"]
 
     if len(legs) < 2:
         return None
 
-    comb_odd = 1.0
     comb_prob = 1.0
     for l in legs:
-        comb_odd *= l["odd"]
         comb_prob *= l["prob"]
 
     real = all(l["ev"] is not None for l in legs)
     ev = round(comb_prob * comb_odd - 1, 4) if real else None
     # stake FIXA sugerida: Kelly não se aplica ao modo acerto (sem edge medido)
     stake = flat_stake(settings.bankroll, settings.stake_cap_pct, fraction=0.5)
+    n_real = sum(1 for l in legs if l.get("odd_kind") == "real")
 
     return {
         "legs": legs,
@@ -542,28 +618,36 @@ def build_multiple(analyzed: list, settings) -> dict | None:
         "combined_prob": round(comb_prob, 4),
         "ev": ev,
         "stake": stake,
+        "target_odd": round(target, 2),
+        "real_legs": n_real,
+        "min_grade": min_grade,
     }
 
 
-def pick_best_market(analysis: dict, odds: dict | None, mode: str = "prob"):
+def pick_best_market(analysis: dict, odds: dict | None, mode: str = "prob",
+                     odds_meta: dict | None = None):
     """
-    v2.1 — seleção SOMENTE entre mercados de gols/BTTS.
-    mode="prob" (padrão): o mais provável de acontecer dentro da janela
-    [PICK_MIN_PROB, PICK_MAX_PROB]; odds só aparecem como informação.
-    mode="ev": mesma lista de gols, ordenada por valor esperado.
+    Seleção SOMENTE entre mercados de gols/BTTS.
+    mode="balanced" (padrão v2.3): equilíbrio acerto × odd — a perna mais
+      segura cujo preço paga o risco; sem preço real/derivado, cai para prob.
+    mode="prob": o mais provável puro na janela [PICK_MIN_PROB, PICK_MAX_PROB].
+    mode="ev": ordena por valor esperado (precisa de odds reais).
     """
     probs = analysis["markets"]
     odds = odds or {}
     candidates = []
     for pref_i, mk in enumerate(GOAL_PICK_MARKETS):
         p = probs.get(mk, 0)
-        if not (PICK_MIN_PROB <= p <= PICK_MAX_PROB):
+        floor = BALANCED_PROB_FLOOR if mode == "balanced" else PICK_MIN_PROB
+        if not (floor <= p <= PICK_MAX_PROB):
             continue
         odd = odds.get(mk)
         ev = p * odd - 1 if odd else None
         show_odd = odd or 1 / p
         if mode == "ev":
             score = ev if ev is not None else -9.0
+        elif mode == "balanced" and odds:
+            score = leg_value_score(p, odd)
         else:
             score = p
         candidates.append((score, -pref_i, mk, p, show_odd, ev))
@@ -571,15 +655,144 @@ def pick_best_market(analysis: dict, odds: dict | None, mode: str = "prob"):
         return None
     candidates.sort(key=lambda t: (-t[0], t[1]))
     score, _pi, mk, p, odd, ev = candidates[0]
+    real_set = set((odds_meta or {}).get("real") or [])
+    derived_set = set((odds_meta or {}).get("derived") or [])
     return {
         "market": mk,
         "label": MARKET_LABELS[mk],
         "prob": round(p, 4),
         "odd": round(odd, 2),
         "odd_is_fair": ev is None,
+        "odd_kind": ("real" if mk in real_set else
+                     ("derived" if mk in derived_set else ("real" if ev is not None else "fair"))),
         "ev": round(ev, 4) if ev is not None else None,
         "score": round(score, 4),
+        "value": round(leg_value_score(p, odd if ev is not None else None), 4),
     }
+
+
+UNDER_MARKETS = {"under_0.5", "under_1.5", "under_2.5", "under_3.5"}
+
+
+def _side_of(market: str) -> str:
+    """Sentido da perna para comparar com tendências: over/under/btts/etc."""
+    if market.startswith("under_"):
+        return "under"
+    if market.startswith("over_") or market in ("ht_0.5", "at_0.5", "ht_1.5", "at_1.5"):
+        return "over"
+    if market == "btts_yes":
+        return "btts"
+    if market == "btts_no":
+        return "btts_no"
+    return "neutral"
+
+
+def trader_checklist(analysis: dict, pick: dict | None, odds_devig: dict | None,
+                     rest_home: int | None, rest_away: int | None) -> dict:
+    """Verificação criteriosa jogo a jogo — a camada que separa palpite de decisão.
+
+    Cada item vira ✓ (confirma), ~ (atenção) ou ✗ (contraindica), com nota
+    0–10 e selo A/B/C. O selo NÃO é promessa de green: é a soma das
+    evidências objetivas disponíveis antes do jogo.
+    """
+    model_probs = analysis.get("model_markets") or analysis.get("markets") or {}
+    pick_mk = (pick or {}).get("market")
+    pick_prob = (pick or {}).get("prob")
+    side = _side_of(pick_mk or "")
+    items = []
+
+    # 1) amostra: sem histórico suficiente toda probabilidade é frágil
+    n_eff = (analysis.get("sample_home", 0) or 0) + (analysis.get("sample_away", 0) or 0)
+    st = "ok" if n_eff >= 26 else ("warn" if n_eff >= 16 else "bad")
+    items.append({"item": "Amostra dos dois times", "state": st,
+                  "detail": f"{n_eff:.0f} jogos ponderados (mínimo saudável: ~26)"})
+
+    # 2) insumo de força: modelo conjunto > xG por time > gols brutos
+    if analysis.get("joint_model"):
+        st, det = "ok", "λ ajustado por adversário (modelo conjunto da liga sobre xG)"
+    elif analysis.get("xg_used"):
+        st, det = "ok", "força calculada sobre xG (qualidade das chances)"
+    else:
+        st, det = "warn", "liga sem xG público: força sobre gols brutos (mais ruído)"
+    items.append({"item": "Qualidade do insumo", "state": st, "detail": det})
+
+    # 3) concordância modelo × mercado (só com preço real/derivado do consenso)
+    if odds_devig and pick_mk and pick_mk in odds_devig and pick_prob is not None:
+        gap = abs(model_probs.get(pick_mk, pick_prob) - odds_devig[pick_mk])
+        st = "ok" if gap <= 0.04 else ("warn" if gap <= 0.09 else "bad")
+        items.append({"item": "Modelo × mercado", "state": st,
+                      "detail": f"divergência de {gap*100:.0f} p.p. no mercado da perna"
+                                + (" — modelos concordam" if st == "ok" else
+                                   (" — atenção" if st == "warn" else " — o modelo discorda do mercado; exige conferência manual"))})
+
+    # 4) descanso: elenco cansado quebra padrão de gols
+    if rest_home is not None and rest_away is not None:
+        gap = abs((rest_home or 0) - (rest_away or 0))
+        short = min(rest_home, rest_away)
+        if short <= 2 and gap >= 3:
+            st = "bad"
+        elif short <= 2 or gap >= 3:
+            st = "warn"
+        else:
+            st = "ok"
+        items.append({"item": "Descanso", "state": st,
+                      "detail": f"casa {rest_home}d · fora {rest_away}d desde o último jogo"})
+
+    # 5) tendência recente alinhada com a perna
+    th, ta = analysis.get("trends_home") or {}, analysis.get("trends_away") or {}
+    if th.get("n") and ta.get("n") and side != "neutral":
+        def rate(t, key): return t.get(key, 0.5) or 0.5
+        if side == "over":
+            r = (rate(th, "over15_rate") + rate(ta, "over15_rate")) / 2
+            st = "ok" if r >= 0.70 else ("warn" if r >= 0.50 else "bad")
+            det = f"Over 1.5 em {r*100:.0f}% dos últimos jogos dos dois times"
+        elif side == "under":
+            r = (1 - rate(th, "over25_rate") + 1 - rate(ta, "over25_rate")) / 2
+            st = "ok" if r >= 0.65 else ("warn" if r >= 0.45 else "bad")
+            det = f"jogos com até 2 gols em {r*100:.0f}% das rodadas recentes"
+        elif side == "btts":
+            r = (rate(th, "btts_rate") + rate(ta, "btts_rate")) / 2
+            st = "ok" if r >= 0.60 else ("warn" if r >= 0.45 else "bad")
+            det = f"ambas marcam em {r*100:.0f}% dos últimos jogos"
+        else:
+            r = (1 - rate(th, "btts_rate") + 1 - rate(ta, "btts_rate")) / 2
+            st = "ok" if r >= 0.55 else ("warn" if r >= 0.40 else "bad")
+            det = f"jogos sem as duas marcarem em {r*100:.0f}%"
+        items.append({"item": "Tendência recente × perna", "state": st, "detail": det})
+
+    # 6) H2H de gols (quando existe amostra mínima)
+    h2h = analysis.get("h2h") or []
+    if len(h2h) >= 3:
+        if side == "over":
+            r = sum(1 for h in h2h if h.get("total", 0) >= 2) / len(h2h)
+        elif side == "under":
+            r = sum(1 for h in h2h if h.get("total", 0) <= 2) / len(h2h)
+        elif side == "btts":
+            r = sum(1 for h in h2h if h.get("btts")) / len(h2h)
+        else:
+            r = None
+        if r is not None:
+            st = "ok" if r >= 0.67 else ("warn" if r >= 0.40 else "bad")
+            items.append({"item": "Histórico do confronto", "state": st,
+                          "detail": f"sinal da perna em {r*100:.0f}% dos últimos {len(h2h)} confrontos"})
+
+    # 7) ambiente da liga coerente com a perna
+    env = analysis.get("league_env") or {}
+    if env.get("over25_rate") is not None and side != "neutral":
+        o = env["over25_rate"]
+        if side in ("over", "btts"):
+            st = "ok" if o >= 0.52 else ("warn" if o >= 0.45 else "bad")
+        else:
+            st = "ok" if o <= 0.44 else ("warn" if o <= 0.52 else "bad")
+        items.append({"item": "Perfil da liga", "state": st,
+                      "detail": f"média {env.get('avg_goals', '—')} gols/jogo · Over 2.5 em {o*100:.0f}%"})
+
+    weights = {"ok": 2.0, "warn": 1.0, "bad": 0.0}
+    total_w = sum(weights[i["state"]] for i in items)
+    max_w = 2.0 * len(items) or 1.0
+    score = round(10 * total_w / max_w, 1)
+    grade = "A" if score >= 8 else ("B" if score >= 6 else "C")
+    return {"score": score, "grade": grade, "items": items}
 
 
 def flat_stake(bankroll: float, cap_pct: float = 3.0, fraction: float = 0.5) -> dict:

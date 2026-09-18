@@ -60,6 +60,21 @@ def _migrate(c):
         c.execute("ALTER TABLE bets ADD COLUMN closing_odd REAL")
     if "clv" not in cols:
         c.execute("ALTER TABLE bets ADD COLUMN clv REAL")
+    # disco do Render free é limitado: cache vencido é apagado na hora
+    purge_expired_cache(c)
+
+
+def purge_expired_cache(c=None):
+    """Apaga linhas de cache já vencidas. Roda na inicialização do app."""
+    own = c is None
+    if own:
+        c = conn()
+    try:
+        c.execute("DELETE FROM cache WHERE expires < ?", (time.time(),))
+        c.commit()
+    finally:
+        if own:
+            c.close()
 
 
 def get_setting(key: str, default=None):
