@@ -467,6 +467,12 @@ ANCHOR_MIN_PROB = 0.72
 BALANCED_PROB_FLOOR = 0.58     # abaixo disso não é perna, é loteria disfarçada
 MIN_ODD_USEFUL = 1.12          # odd menor mal paga o risco de fila
 TARGET_PARLAY_ODD = 2.8        # alvo padrão da múltipla (configurável)
+GRADE_ORDER = {"A": 3, "B": 2, "C": 1}
+
+
+def grade_allowed(grade: str | None, minimum: str) -> bool:
+    """A múltipla honra a régua: com mínimo "B" (padrão), perna C NUNCA entra."""
+    return GRADE_ORDER.get(grade or "C", 1) >= GRADE_ORDER.get((minimum or "B").upper(), 2)
 
 
 def leg_value_score(prob: float, odd: float | None) -> float:
@@ -523,24 +529,31 @@ def candidate_markets(analysis: dict, odds: dict | None, mode: str = "prob",
 
 
 def build_multiple(analyzed: list, settings) -> dict | None:
-    """Múltipla do dia — equilíbrio acerto × odd com alvo de odd (v2.3).
+    """Múltipla do dia — equilíbrio acerto × odd, alvo de odd e selo A/B (v2.3).
 
     Como um trader monta: uma perna por jogo, escolhida pelo melhor
-    EQUILÍBRIO (prob alta, odd que pague o risco), preferindo preços reais,
-    e pernas adicionadas da mais segura para a menos segura ATÉ atingir a
-    odd-alvo (padrão ~2.8) ou o teto de MAX_LEGS. Abaixo do alvo com 2+
-    pernas seguras vale mais que 4 pernas forçadas por gordura de odd.
-    Pernas abaixo de MIN_ODD_USEFUL só entram se não houver alternativa.
+    EQUILÍBRIO (prob alta, odd que pague o risco), SEMPRE com selo da
+    verificação do trader no mínimo "B" (padrão) — perna com selo C não
+    entra na múltipla em hipótese alguma; se nenhum ângulo do jogo passa
+    na régua, o jogo fica de fora. Pernas adicionadas da mais segura para
+    a menos segura ATÉ atingir a odd-alvo (padrão ~2.8) ou o teto de
+    MAX_LEGS. Melhor sem múltipla no dia do que múltipla com perna fraca:
+    cada perna C que entra derruba a taxa de acerto da combinação inteira.
     """
     mode = getattr(settings, "pick_mode", "prob")
     target = max(1.6, min(getattr(settings, "target_parlay_odd", TARGET_PARLAY_ODD) or TARGET_PARLAY_ODD, 8.0))
     leg_min = max(1.05, getattr(settings, "min_leg_odd", MIN_ODD_USEFUL) or MIN_ODD_USEFUL)
+    min_grade = getattr(settings, "multiple_min_grade", "B") or "B"
 
     per_match = []
     for r in analyzed:
+        leg_grades = r["analysis"].get("leg_grades") or {}
         cands = [c for c in candidate_markets(r["analysis"], r.get("odds"), mode=mode,
                                               odds_meta=r.get("odds_meta"))
                  if c["prob"] >= (BALANCED_PROB_FLOOR if mode == "balanced" else PICK_MIN_PROB)]
+        # régua de selo: filtra ANTES de escolher a perna do jogo
+        cands = [c for c in cands
+                 if grade_allowed((leg_grades.get(c["market"]) or {}).get("grade"), min_grade)]
         if not cands:
             continue
         best = cands[0]
@@ -550,6 +563,7 @@ def build_multiple(analyzed: list, settings) -> dict | None:
                         if c["odd"] >= leg_min and c["prob"] >= BALANCED_PROB_FLOOR), None)
             if alt:
                 best = alt
+        best["grade"] = (leg_grades.get(best["market"]) or {}).get("grade")
         per_match.append((r, best))
 
     if mode == "balanced":
@@ -567,7 +581,6 @@ def build_multiple(analyzed: list, settings) -> dict | None:
             # só derruba a taxa de acerto sem melhorar o preço de verdade
             if len(legs) >= 2 and comb_odd >= target:
                 break
-        best_of = r.get("best") or {}
         legs.append({
             "fixture_id": r["id"],
             "match": f'{r["home"]["name"]} x {r["away"]["name"]}',
@@ -580,7 +593,7 @@ def build_multiple(analyzed: list, settings) -> dict | None:
             "ev": c["ev"],
             "value": c.get("value"),
             "odd_kind": c.get("odd_kind", "fair"),
-            "grade": best_of.get("grade") if best_of.get("market") == c["market"] else None,
+            "grade": c.get("grade"),
             "anchor": c["odd"] < ANCHOR_ODD,
             "_n_eff": r["analysis"].get("n_eff", 12.0),
         })
@@ -607,6 +620,7 @@ def build_multiple(analyzed: list, settings) -> dict | None:
         "stake": stake,
         "target_odd": round(target, 2),
         "real_legs": n_real,
+        "min_grade": min_grade,
     }
 
 

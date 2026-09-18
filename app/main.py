@@ -35,8 +35,8 @@ from pydantic import BaseModel
 from . import calibration, db, joint, odds_fd, provider, understat
 from .model import (
     MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
-    de_vig_markets, flat_stake, kelly_stake, league_priors, league_xg_priors,
-    pick_best_market, trader_checklist,
+    candidate_markets, de_vig_markets, flat_stake, kelly_stake, league_priors,
+    league_xg_priors, pick_best_market, trader_checklist,
 )
 
 app = FastAPI(title="FutAnalytics")
@@ -63,6 +63,7 @@ class Settings(BaseModel):
     pick_mode: str = "balanced"       # v2.3: "balanced" = acerto × odd | "prob" | "ev"
     target_parlay_odd: float = 2.8    # odd-alvo da múltipla
     min_leg_odd: float = 1.12         # perna abaixo disso só se não houver alternativa
+    multiple_min_grade: str = "B"     # selo mínimo da múltipla: "B" = só A/B (nunca C)
     use_fd_odds: bool = True          # odds reais grátis (football-data.co.uk)
     derive_margin: float = 0.06       # margem aplicada nas linhas derivadas do consenso
 
@@ -206,6 +207,7 @@ class SettingsIn(BaseModel):
     pick_mode: str | None = None
     target_parlay_odd: float | None = None
     min_leg_odd: float | None = None
+    multiple_min_grade: str | None = None
     use_fd_odds: bool | None = None
     derive_margin: float | None = None
 
@@ -435,10 +437,22 @@ async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
 
     best = pick_best_market(analysis, odds, mode=s.pick_mode, odds_meta=odds_meta)
 
-    # checklist do trader: as evidências objetivas atrás do pick
+    # checklist do trader POR CANDIDATO: a múltipla só aceita pernas com selo
+    # A/B (nunca C), então cada ângulo possível do jogo já sai com seu selo.
+    # O checklist exibido no card é o do pick principal.
     rest_home = hg[0][0] if hg else None
     rest_away = ag[0][0] if ag else None
-    checklist = trader_checklist(analysis, best, odds_devig, rest_home, rest_away)
+    leg_grades: dict = {}
+    checklist = None
+    for c in candidate_markets(analysis, odds, mode=s.pick_mode, odds_meta=odds_meta):
+        cl = trader_checklist(analysis, {"market": c["market"], "prob": c["prob"]},
+                              odds_devig, rest_home, rest_away)
+        leg_grades[c["market"]] = {"grade": cl["grade"], "score": cl["score"]}
+        if best and c["market"] == best["market"]:
+            checklist = cl
+    analysis["leg_grades"] = leg_grades
+    if checklist is None:
+        checklist = trader_checklist(analysis, best, odds_devig, rest_home, rest_away)
     analysis["checklist"] = checklist
     if best:
         best["grade"] = checklist["grade"]
@@ -537,6 +551,7 @@ async def day_analysis(day: str | None = None):
         "day": day,
         "provider": s.provider,
         "pick_mode": s.pick_mode,
+        "multiple_min_grade": s.multiple_min_grade,
         "fixtures": analyzed,
         "errors": errors,
         "best_single": best_single["id"] if best_single else None,

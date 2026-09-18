@@ -165,6 +165,14 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
         </div>
         <div class="field"><label>Odd-alvo da múltipla (recomendado 2.5 a 3.0 · o app para de adicionar pernas ao atingir)</label><input id="sTarget" type="number" step="0.1" min="1.6" max="8"></div>
         <div class="field"><label>Odd mínima de uma perna (abaixo disso só entra sem alternativa · recomendado 1.12)</label><input id="sMinLeg" type="number" step="0.02" min="1.02" max="1.6"></div>
+        <div class="field">
+          <label>Selo mínimo das pernas da múltipla (verificação do trader)</label>
+          <select id="sMinGrade">
+            <option value="B">Selo A ou B (recomendado · perna C NUNCA entra)</option>
+            <option value="A">Só selo A (ultra criterioso · terá dias sem múltipla)</option>
+            <option value="C">Sem filtro de selo (aceita perna C)</option>
+          </select>
+        </div>
         <div class="field"><label>EV mínimo para recomendar (% · só usado no modo "valor esperado")</label><input id="sEv" type="number" step="0.5"></div>
         <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado · recomendado 25%)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
         <div class="field"><label>Peso do xG sobre gols brutos (% · recomendado 65%; ligas sem xG usam gols + calibração)</label><input id="sXg" type="number" step="5" min="0" max="100"></div>
@@ -237,6 +245,7 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
       <p><b>Linhas derivadas do consenso.</b> E Over 1.5, BTTS, totais por time? Não existem no arquivo gratuito. Em vez de inventar, o app faz o que as próprias casas fazem: <b>inversão Poisson</b> — encontra os gols esperados implícitos no 1X2 + Over 2.5 do mercado (Bet365/Pinnacle, sem a margem) e projeta as demais linhas com a mesma matriz Dixon-Coles do motor, descontando uma margem padrão. Essas vêm com selo <b>derivada</b>: estimativa boa, mas não é preço de casa — confira na sua antes de confirmar. Jogos fora das ligas cobertas (Brasileirão, Champions) seguem com a <b>odd justa do modelo</b>, sem disfarce.</p>
       <p><b>Equilíbrio acerto × odd.</b> Uma perna de 92% @1.04 estraga sua múltipla: risco inteiro por 4 centavos. Uma de 75% @1.55 às vezes é muito melhor negócio. O modo padrão "Equilíbrio acerto × odd" escolhe, em cada jogo, a linha mais segura cujo preço paga o risco (probabilidade manda, preço decide o desempate), evita odds abaixo de ~1.12 e monta a múltipla adicionando pernas da mais segura para a menos segura <b>só até atingir a odd-alvo</b> (padrão ~2.8): perna além do alvo só derruba sua taxa de acerto, não melhora retorno.</p>
       <p><b>Verificação do trader (selo A/B/C).</b> Antes de cada pick o app passa pelo checklist que um profissional passa: amostra suficiente, insumo (xG/modelo conjunto), concordância do modelo com o mercado (modelo discordar muito do mercado sem motivo é sinal amarelo, não verde), descanso dos dois times, tendência recente alinhada com a perna, histórico do confronto e perfil da liga. A nota 0–10 vira o selo: A = evidências alinhadas, B = vale com cautela, C = o trader passa ou reduz. O selo não é promessa de green — é a soma das evidências disponíveis. A conferência humana de desfalques e escalações continua sendo sua e insubstituível.</p>
+      <p><b>Múltipla com régua de selo (padrão: nunca C).</b> A múltipla do dia só aceita pernas com selo A ou B da verificação — perna selo C <b>não entra em hipótese alguma</b> (a régua é configurável em Configurações). O selo é calculado para cada ângulo candidato de cada jogo, não só para o pick principal. Consequência deliberada: haverá dias sem múltipla nenhuma. É assim que um profissional opera: uma perna fraca derruba a combinação inteira, e a taxa de acerto de 4 pernas é a multiplicação das quatro — uma única 50/50 no meio transforma uma múltipla de 60% em uma de 30%. Em dia limpo, a múltipla aparece; em dia sujo, o app te protege de você mesmo.</p>
       <p><b>Nada é gravado sozinho.</b> Bilhetes, resultados e CLV só existem se você registrar com um clique consciente. O único dado escrito automaticamente é o cache temporário das APIs (expira em horas e é limpo sozinho): sem ele, as cotas gratuitas das fontes de dados estourariam e o app pararia de funcionar. No Render free (disco apagado a cada deploy) o fluxo é: jogou o dia, baixou o backup em Configurações, vai atualizar o app → restaura o backup depois do deploy. Contas, senhas e jogos passados ficam com você, no seu arquivo — não no servidor.</p>
     </div>
   </section>
@@ -281,6 +290,7 @@ async function loadSettings(){
   $('#sPickMode').value=SETTINGS.pick_mode||'balanced';
   $('#sTarget').value=SETTINGS.target_parlay_odd||2.8;
   $('#sMinLeg').value=SETTINGS.min_leg_odd||1.12;
+  $('#sMinGrade').value=SETTINGS.multiple_min_grade||'B';
 }
 $('#saveProvider').onclick=async()=>{
   await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -318,6 +328,7 @@ $('#saveBank').onclick=async()=>{
       use_fd_odds:$('#sFdOdds').checked,
       target_parlay_odd:Math.max(1.6,Math.min(8,+$('#sTarget').value||2.8)),
       min_leg_odd:Math.max(1.02,Math.min(1.6,+$('#sMinLeg').value||1.12)),
+      multiple_min_grade:$('#sMinGrade').value,
       pick_mode:$('#sPickMode').value})});
   toast('Gestão de banca salva');await loadSettings();loadDay();
 };
@@ -481,11 +492,17 @@ function renderFixture(fx,isBest){
 }
 
 function renderMultiple(m){
-  if(!m)return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem jogos suficientes para montar uma múltipla com mercados variados hoje.</div></div>`;
+  if(!m){
+    const mg=DAY&&(DAY.multiple_min_grade||'B');
+    return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem múltipla hoje${mg!=='C'?`: nenhum conjunto de pernas alcançou o selo mínimo <b>${mg}</b> da verificação do trader (${mg==='B'?'só selo A ou B entram':'só selo A entra'})`:''}. Disciplina de banca: dia de apostas individuais criteriosas ou de ficar de fora — múltipla forçada é presente para a casa.</div></div>`;
+  }
+  const mg=m.min_grade||'B';
   const kindPill=k=>k==='real'?'<span class="pill green" style="font-size:9px;padding:1px 6px" title="Odd real de casa">real</span>':(k==='derived'?'<span class="pill amber" style="font-size:9px;padding:1px 6px" title="Odd derivada do consenso">derivada</span>':'<span class="pill gray" style="font-size:9px;padding:1px 6px" title="Odd justa do modelo (sem mercado)">justa</span>');
   const legGradePill=g=>g?`<span class="pill ${{A:'green',B:'blue',C:'red'}[g]||'gray'}" style="font-size:9px;padding:1px 6px" title="Verificação do trader da perna">${g}</span>`:'';
   return `<div class="card" style="border-color:var(--amber)">
-    <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3><span class="spacer"></span>
+    <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3>
+      ${mg!=='C'?`<span class="pill green" title="Todas as pernas passaram na verificação do trader com selo no mínimo ${mg}. Perna com selo C não entra na múltipla.">só selo ${mg==='B'?'A/B':'A'}</span>`:''}
+      <span class="spacer"></span>
       <span class="pill amber">odd combinada ${m.combined_odd.toFixed(2)}${m.target_odd?` <span class="small" style="font-weight:400">(alvo ${m.target_odd.toFixed(2)})</span>`:''}</span>
       <span class="pill ${m.ev==null?'gray':(m.ev>0?'green':'red')}">EV ${m.ev==null?'—':(m.ev*100).toFixed(1)+'%'}</span>
       ${m.real_legs!==undefined?`<span class="pill ${m.real_legs===m.legs.length?'green':(m.real_legs?'blue':'gray')}" title="Quantas pernas têm preço REAL de casa de apostas; derivadas vêm do consenso; justas são do modelo">${m.real_legs}/${m.legs.length} odds reais</span>`:''}
