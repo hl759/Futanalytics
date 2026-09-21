@@ -256,6 +256,13 @@ label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bot
 const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
 const fmt=n=>'R$ '+Number(n).toFixed(2).replace('.',',');
 const pct=p=>(p*100).toFixed(1).replace('.',',')+'%';
+// Data de HOJE no fuso do dispositivo. Antes usávamos toISOString() (UTC):
+// no Brasil (UTC-3), entre 21h e 23h59 o painel carregava silenciosamente o
+// dia de AMANHÃ — e como há dia sem rodada nas ligas monitoradas, parecia
+// que o app tinha parado de mostrar jogos.
+const localDay=d=>{const x=new Date(d);x.setMinutes(x.getMinutes()-x.getTimezoneOffset());return x.toISOString().slice(0,10);};
+const WD=['dom','seg','ter','qua','qui','sex','sáb'];
+function jumpDay(d){$('#dayPick').value=d;loadDay();}
 let SETTINGS=null, DAY=null;
 
 function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2600);}
@@ -520,7 +527,7 @@ function renderMultiple(m){
 }
 
 async function loadDay(){
-  const day=$('#dayPick').value||new Date().toISOString().slice(0,10);
+  const day=$('#dayPick').value||localDay(new Date());
   $('#dayContent').innerHTML='<div class="loading"><div class="spin"></div><br>Analisando jogos do dia...<br><span class="small">Na primeira carga do dia com a football-data.org isso pode levar alguns minutos: a API gratuita limita 10 consultas por minuto e cada time exige uma consulta de histórico. Depois fica em cache e abre na hora.</span></div>';
   let attempt=0;
   while(true){
@@ -549,7 +556,14 @@ async function loadDay(){
     let html='';
     if(DAY.provider==='demo')html+=`<div class="warn">Você está no modo demonstração com dados simulados. Configure uma chave gratuita em Configurações para analisar jogos reais do dia.</div>`;
     if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;
-    if(!DAY.fixtures.length){html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data. Tente outra data ou outro provedor.</div></div>`;}
+    if(!DAY.fixtures.length){
+      const cnt=DAY.day_counts||{};
+      const chips=Object.keys(cnt).filter(d=>d&&d!==DAY.day).sort().map(d=>{
+        const lab=WD[new Date(d+'T12:00:00').getDay()]+' '+d.slice(8,10)+'/'+d.slice(5,7);
+        return `<button class="btn sm ghost" onclick="jumpDay('${d}')">${lab} · ${cnt[d]} jogo${cnt[d]>1?'s':''}</button>`;
+      }).join('');
+      html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data${chips?`.<br><span class="small">Algumas ligas não têm rodada todo dia (ex.: segundas-feiras). Jogos nos dias vizinhos — toque para abrir:</span><div class="row" style="justify-content:center;margin-top:10px;gap:8px;flex-wrap:wrap">${chips}</div>`:'. Tente outra data ou outro provedor.'}</div></div>`;
+    }
     else{
       html+=renderMultiple(DAY.multiple);
       const best=DAY.fixtures.find(f=>f.id===DAY.best_single);
@@ -628,7 +642,7 @@ async function settle(id,st){const r=await api(`/api/bets/${id}/settle`,{method:
 async function delBet(id){await api('/api/bets/'+id,{method:'DELETE'});loadBets();}
 
 (async()=>{
-  $('#dayPick').value=new Date().toISOString().slice(0,10);
+  $('#dayPick').value=localDay(new Date());
   try{await loadSettings();}catch(e){toast('Configurações não carregaram: '+e.message);}
   loadDay();
 })();

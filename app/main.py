@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.3.1"
+VERSION = "2.3.2"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -491,6 +491,14 @@ async def day_analysis(day: str | None = None):
     except provider.ProviderError as e:
         raise HTTPException(502, str(e))
 
+    # Dia sem jogos nas ligas monitoradas (ex.: segunda-feira sem rodada) não é
+    # defeito — mas precisamos distinguir isso de uma falha. A contagem dos dias
+    # vizinhos já veio na MESMA resposta do provedor fd (custo zero de cota) e
+    # deixa o painel mostrar quando os próximos jogos acontecem.
+    day_counts: dict = {}
+    if not fixtures and s.provider == "fd":
+        day_counts = provider.fd_day_counts(day)
+
     with_odds = s.provider in ("af", "demo")
     # limitar concorrência para respeitar rate limits
     sem = asyncio.Semaphore(2 if s.provider == "fd" else 5)
@@ -576,6 +584,7 @@ async def day_analysis(day: str | None = None):
         "multiple_min_grade": s.multiple_min_grade,
         "fixtures": analyzed,
         "errors": errors,
+        "day_counts": day_counts,
         "best_single": best_single["id"] if best_single else None,
         "multiple": multiple,
         "bankroll": s.bankroll,
