@@ -132,13 +132,15 @@ def _local_day(utc_iso: str) -> str:
 
 
 async def fd_fixtures(token: str, day: str):
-    key = f"fd:fixtures:v2:{day}"
+    key = f"fd:fixtures:v3:{day}"
     cached = db.cache_get(key)
     if cached is not None:
         return cached
-    # Janela de 3 dias: o dateTo da API se comporta como limite aberto em
-    # consultas de dia único, e jogos noturnos no Brasil caem no dia seguinte
-    # em UTC. Buscamos a janela e filtramos pela data local (UTC-3).
+    # Janela de 9 dias: (1) o dateTo da API se comporta como limite aberto em
+    # consultas de dia único e jogos noturnos no Brasil caem no dia seguinte em
+    # UTC; (2) MESMO CUSTO DE COTA (1 requisição) e o painel ganha a contagem de
+    # jogos de todos os dias da semana — dia sem rodada deixa de ser um beco sem
+    # saída: mostramos QUANDO os próximos jogos acontecem.
     try:
         d0 = dt.date.fromisoformat(day)
     except (TypeError, ValueError):
@@ -146,7 +148,7 @@ async def fd_fixtures(token: str, day: str):
     async with httpx.AsyncClient() as client:
         data = await _fd_get(
             client, "/matches", token,
-            {"dateFrom": str(d0 - timedelta(days=1)), "dateTo": str(d0 + timedelta(days=1))},
+            {"dateFrom": str(d0 - timedelta(days=4)), "dateTo": str(d0 + timedelta(days=4))},
         )
     out = []
     counts: dict[str, int] = {}

@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.3.2"
+VERSION = "2.3.3"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -726,4 +726,6 @@ app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC / "index.html"))
+    # no-cache: o index é revalidado (ETag) a cada visita — depois de um deploy
+    # o celular pega o HTML novo na primeira abertura, sem cache velho.
+    return FileResponse(str(STATIC / "index.html"), headers={"Cache-Control": "no-cache"})
