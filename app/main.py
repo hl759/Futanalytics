@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.3.3"
+VERSION = "2.3.4"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -724,8 +724,12 @@ def labels():
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def index():
     # no-cache: o index é revalidado (ETag) a cada visita — depois de um deploy
     # o celular pega o HTML novo na primeira abertura, sem cache velho.
+    # HEAD: a plataforma (proxy do Render) sonda "HEAD /" logo após cada
+    # subida de instância; o FastAPI atual responde 405 para HEAD em rotas
+    # criadas só com @app.get — aceitar HEAD (mesma resposta, sem corpo)
+    # elimina o "405 Method Not Allowed" dos logs.
     return FileResponse(str(STATIC / "index.html"), headers={"Cache-Control": "no-cache"})
