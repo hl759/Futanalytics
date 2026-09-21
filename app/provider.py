@@ -149,13 +149,18 @@ async def fd_fixtures(token: str, day: str):
             {"dateFrom": str(d0 - timedelta(days=1)), "dateTo": str(d0 + timedelta(days=1))},
         )
     out = []
+    counts: dict[str, int] = {}
     for m in data.get("matches", []):
         try:
             code = m.get("competition", {}).get("code")
             if code not in FD_COMPETITIONS:
                 continue
             utc = m.get("utcDate")
-            if not utc or _local_day(utc) != day:
+            if not utc:
+                continue
+            local_d = _local_day(utc)
+            counts[local_d] = counts.get(local_d, 0) + 1
+            if local_d != day:
                 continue
             out.append({
                 "id": f"fd-{m['id']}",
@@ -170,7 +175,17 @@ async def fd_fixtures(token: str, day: str):
             continue  # jogo mal formado na API: pula, não derruba o dia
     ttl = 3600 if day >= str(date.today()) else 7 * 86400
     db.cache_set(key, out, ttl)
+    # Contagem de jogos por dia da JANELA (mesma resposta da API: custo zero em
+    # cota). Dias sem rodada nas ligas monitoradas (ex.: segunda-feira) não são
+    # defeito — o painel usa estas contagens para mostrar quando voltam a haver
+    # jogos em vez de um "nenhum jogo" que parece quebra.
+    db.cache_set(f"fd:daycounts:v1:{day}", counts, ttl)
     return out
+
+
+def fd_day_counts(day: str) -> dict:
+    """Jogos por dia na janela já baixada do dia pedido (só cache; não gasta cota)."""
+    return db.cache_get(f"fd:daycounts:v1:{day}") or {}
 
 
 async def fd_team_recent(token: str, team_id: int, team_name: str):
