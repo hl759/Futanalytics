@@ -558,11 +558,11 @@ async function loadDay(){
     if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;
     if(!DAY.fixtures.length){
       const cnt=DAY.day_counts||{};
-      const chips=Object.keys(cnt).filter(d=>d&&d!==DAY.day).sort().map(d=>{
+      const chips=Object.keys(cnt).filter(d=>d&&d!==DAY.day&&cnt[d]>0).sort().map(d=>{
         const lab=WD[new Date(d+'T12:00:00').getDay()]+' '+d.slice(8,10)+'/'+d.slice(5,7);
         return `<button class="btn sm ghost" onclick="jumpDay('${d}')">${lab} · ${cnt[d]} jogo${cnt[d]>1?'s':''}</button>`;
       }).join('');
-      html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data${chips?`.<br><span class="small">Algumas ligas não têm rodada todo dia (ex.: segundas-feiras). Jogos nos dias vizinhos — toque para abrir:</span><div class="row" style="justify-content:center;margin-top:10px;gap:8px;flex-wrap:wrap">${chips}</div>`:'. Tente outra data ou outro provedor.'}</div></div>`;
+      html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data${chips?`.<br><span class="small">Algumas ligas não têm rodada todo dia (ex.: segundas e quartas de semana sem rodada). Jogos nos dias próximos — toque para abrir:</span><div class="row" style="justify-content:center;margin-top:10px;gap:8px;flex-wrap:wrap">${chips}</div>`:'. Tente outra data ou outro provedor.'}</div></div>`;
     }
     else{
       html+=renderMultiple(DAY.multiple);
