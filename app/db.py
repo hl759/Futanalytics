@@ -6,48 +6,57 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "futanalytics.db"
 
+_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+    CREATE TABLE IF NOT EXISTS cache (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        expires REAL
+    );
+    CREATE TABLE IF NOT EXISTS bets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT,
+        match_date TEXT,
+        label TEXT,
+        market TEXT,
+        selection TEXT,
+        odd REAL,
+        stake REAL,
+        prob REAL,
+        ev REAL,
+        is_multiple INTEGER DEFAULT 0,
+        legs TEXT,
+        status TEXT DEFAULT 'open',
+        profit REAL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS api_usage (
+        day TEXT PRIMARY KEY,
+        count INTEGER DEFAULT 0
+    );
+"""
+
 
 def conn():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
+    # Auto-reparo: o disco do Render free é volátil e o arquivo pode nascer/
+    # sumir/correr por fora. Sem o schema, TODA a API respondia 500
+    # ('no such table') e o app não mostrava nada — agora o schema volta.
+    row = c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"
+    ).fetchone()
+    if row is None:
+        c.executescript(_SCHEMA)
+        _migrate(c)
     return c
 
 
 def init():
     with conn() as c:
-        c.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-            CREATE TABLE IF NOT EXISTS cache (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                expires REAL
-            );
-            CREATE TABLE IF NOT EXISTS bets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT,
-                match_date TEXT,
-                label TEXT,
-                market TEXT,
-                selection TEXT,
-                odd REAL,
-                stake REAL,
-                prob REAL,
-                ev REAL,
-                is_multiple INTEGER DEFAULT 0,
-                legs TEXT,
-                status TEXT DEFAULT 'open',
-                profit REAL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS api_usage (
-                day TEXT PRIMARY KEY,
-                count INTEGER DEFAULT 0
-            );
-            """
-        )
+        c.executescript(_SCHEMA)
         _migrate(c)
 
 
