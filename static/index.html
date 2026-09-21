@@ -405,7 +405,7 @@ function goalsBlock(a){
   const dist=a.totals_dist||{}, maxP=Math.max(...Object.values(dist),0.01);
   const order=['0','1','2','3','4','5','6+'];
   const bars=order.map(k=>{
-    const p=dist[k]||0;
+    const p=dist[k==='6+'?'6':k]||0;
     return `<div style="flex:1;text-align:center" title="Total ${k} gols: ${(p*100).toFixed(1)}%">
       <div style="height:${Math.max(4,(p/maxP)*64)}px;background:linear-gradient(180deg,var(--blue),var(--green));border-radius:4px 4px 0 0;margin:0 2px"></div>
       <div class="small" style="font-size:10px">${k}</div>
@@ -528,7 +528,7 @@ async function loadDay(){
       DAY=await api('/api/day?day='+day);
       break;
     }catch(e){
-      const gw=/erro 502|erro 503|erro 504|Bad Gateway|Service Unavailable|Gateway Timeout/i.test(e.message);
+      const gw=/erro 502|erro 503|erro 504|Bad Gateway|Service Unavailable|Gateway Timeout|Limite de requisi|Falha de conex/i.test(e.message);
       if(gw && attempt<10){
         attempt++;
         $('#dayContent').innerHTML=`<div class="loading"><div class="spin"></div><br>O servidor gratuito (Render) está aquecendo e cortou a análise no meio.<br><span class="small">Tentativa ${attempt}/10 automática em 15s. Cada tentativa aproveita o que já foi baixado; em 1 a 3 minutos o painel abre sozinho.</span></div>`;
@@ -539,6 +539,7 @@ async function loadDay(){
       return;
     }
   }
+  try{
   $('#provTag').textContent={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'';
   if(DAY.odds_feed&&DAY.odds_feed.available){
     $('#provTag').textContent+=` · odds reais: Bet365/Pinnacle (${DAY.odds_feed.n_events} jogos no arquivo)`;
@@ -559,6 +560,9 @@ async function loadDay(){
       html+=rest.map(f=>renderFixture(f,false)).join('');
     }
     $('#dayContent').innerHTML=html;
+  }catch(e){
+    $('#dayContent').innerHTML='<div class="warn">Erro ao exibir as análises: '+e.message+'. Clique em "Atualizar análise" para recarregar.</div>';
+  }
 }
 $('#reload').onclick=loadDay;
 $('#dayPick').onchange=loadDay;
@@ -625,7 +629,7 @@ async function delBet(id){await api('/api/bets/'+id,{method:'DELETE'});loadBets(
 
 (async()=>{
   $('#dayPick').value=new Date().toISOString().slice(0,10);
-  await loadSettings();
+  try{await loadSettings();}catch(e){toast('Configurações não carregaram: '+e.message);}
   loadDay();
 })();
 </script>

@@ -501,7 +501,7 @@ def candidate_markets(analysis: dict, odds: dict | None, mode: str = "prob",
         if p is None:
             continue
         has_price = mk in odds
-        odd = odds.get(mk) or round(1.0 / p, 2)
+        odd = odds.get(mk) or (round(1.0 / p, 2) if p > 0 else 99.0)
         ev = round(p * odds[mk] - 1, 4) if has_price else None
         if mk in real_set or (has_price and not derived_set):
             kind = "real"

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import random
+import time
 from datetime import date, timedelta
 
 import httpx
@@ -58,22 +59,66 @@ class ProviderError(Exception):
 
 
 # ---------------------------------------------------------------- football-data
+# Tier gratuito: 10 req/min. Em vez de estourar a cota em rajada e virar uma
+# enxurrada de 429 + esperas de 1 min (que parecia "o app travado"), as
+# chamadas são espaçadas de forma a caber no orçamento sempre.
+_FD_MIN_INTERVAL = 6.2          # segundos entre chamadas (~9,7 req/min)
+_fd_last_call = 0.0
+
+
+async def _fd_pace():
+    global _fd_last_call
+    now = time.monotonic()
+    wait = _fd_last_call + _FD_MIN_INTERVAL - now
+    if wait > 0:
+        await asyncio.sleep(wait)
+    _fd_last_call = time.monotonic()
+
+
+def _retry_after_seconds(headers) -> float:
+    try:
+        return max(1.0, float(headers.get("Retry-After", "15")))
+    except (TypeError, ValueError):
+        return 15.0
+
+
 async def _fd_get(client: httpx.AsyncClient, path: str, token: str, params=None):
+    """GET com timeout/rate-limit tratados: TODO erro vira ProviderError.
+
+    Antes, um ConnectError/ReadTimeout/HTTP 5xx escapava sem tratamento e
+    derrubava o /api/day INTEIRO (500) — nenhuma análise aparecia.
+    """
+    last_err: Exception | None = None
     for attempt in range(4):
-        r = await client.get(
-            f"{FD_BASE}{path}",
-            headers={"X-Auth-Token": token},
-            params=params or {},
-            timeout=25,
-        )
+        await _fd_pace()
+        try:
+            r = await client.get(
+                f"{FD_BASE}{path}",
+                headers={"X-Auth-Token": token},
+                params=params or {},
+                timeout=25,
+            )
+        except httpx.HTTPError as e:
+            last_err = e
+            await asyncio.sleep(1.5)
+            continue
         if r.status_code == 429:
-            wait = int(r.headers.get("Retry-After", "15")) + 1
-            await asyncio.sleep(min(wait, 65))
+            await asyncio.sleep(min(_retry_after_seconds(r.headers) + 1, 35))
             continue
         if r.status_code in (400, 403):
             raise ProviderError(f"football-data.org recusou ({r.status_code}): {r.text[:200]}")
-        r.raise_for_status()
-        return r.json()
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            await asyncio.sleep(1.5)
+            continue
+        try:
+            return r.json()
+        except ValueError as e:
+            raise ProviderError(f"football-data.org devolveu resposta inválida: {e}")
+    if last_err is not None:
+        raise ProviderError(f"Falha de conexão com a football-data.org: {last_err}")
     raise ProviderError("Limite de requisições da football-data.org excedido; tente em 1 minuto.")
 
 
@@ -94,7 +139,10 @@ async def fd_fixtures(token: str, day: str):
     # Janela de 3 dias: o dateTo da API se comporta como limite aberto em
     # consultas de dia único, e jogos noturnos no Brasil caem no dia seguinte
     # em UTC. Buscamos a janela e filtramos pela data local (UTC-3).
-    d0 = dt.date.fromisoformat(day)
+    try:
+        d0 = dt.date.fromisoformat(day)
+    except (TypeError, ValueError):
+        raise ProviderError(f"Data inválida: {day!r}. Use o formato AAAA-MM-DD.")
     async with httpx.AsyncClient() as client:
         data = await _fd_get(
             client, "/matches", token,
@@ -102,21 +150,24 @@ async def fd_fixtures(token: str, day: str):
         )
     out = []
     for m in data.get("matches", []):
-        code = m.get("competition", {}).get("code")
-        if code not in FD_COMPETITIONS:
-            continue
-        utc = m.get("utcDate")
-        if not utc or _local_day(utc) != day:
-            continue
-        out.append({
-            "id": f"fd-{m['id']}",
-            "provider": "fd",
-            "league": FD_COMPETITIONS[code],
-            "kickoff_utc": utc,
-            "status": m.get("status"),
-            "home": {"id": m["homeTeam"]["id"], "name": m["homeTeam"]["name"]},
-            "away": {"id": m["awayTeam"]["id"], "name": m["awayTeam"]["name"]},
-        })
+        try:
+            code = m.get("competition", {}).get("code")
+            if code not in FD_COMPETITIONS:
+                continue
+            utc = m.get("utcDate")
+            if not utc or _local_day(utc) != day:
+                continue
+            out.append({
+                "id": f"fd-{m['id']}",
+                "provider": "fd",
+                "league": FD_COMPETITIONS[code],
+                "kickoff_utc": utc,
+                "status": m.get("status"),
+                "home": {"id": m["homeTeam"]["id"], "name": m["homeTeam"]["name"]},
+                "away": {"id": m["awayTeam"]["id"], "name": m["awayTeam"]["name"]},
+            })
+        except (KeyError, TypeError, ValueError):
+            continue  # jogo mal formado na API: pula, não derruba o dia
     ttl = 3600 if day >= str(date.today()) else 7 * 86400
     db.cache_set(key, out, ttl)
     return out
@@ -139,16 +190,19 @@ async def fd_team_recent(token: str, team_id: int, team_name: str):
             },
         )
     games = []
-    for m in sorted(data.get("matches", []), key=lambda x: x["utcDate"], reverse=True)[:18]:
-        ft = m.get("score", {}).get("fullTime", {})
-        hg, ag = ft.get("home"), ft.get("away")
-        if hg is None or ag is None:
-            continue
-        played = dt.datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")).date()
-        days_ago = (today - played).days
-        is_home = m["homeTeam"]["id"] == team_id
-        gf, ga = (hg, ag) if is_home else (ag, hg)
-        games.append([days_ago, is_home, gf, ga])
+    for m in sorted(data.get("matches", []), key=lambda x: x.get("utcDate") or "", reverse=True)[:18]:
+        try:
+            ft = m.get("score", {}).get("fullTime", {})
+            hg, ag = ft.get("home"), ft.get("away")
+            if hg is None or ag is None:
+                continue
+            played = dt.datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")).date()
+            days_ago = (today - played).days
+            is_home = m["homeTeam"]["id"] == team_id
+            gf, ga = (hg, ag) if is_home else (ag, hg)
+            games.append([days_ago, is_home, gf, ga])
+        except (KeyError, TypeError, ValueError):
+            continue  # linha corrompida não derruba o histórico do time
     db.cache_set(key, games, 12 * 3600)
     return games
 
@@ -243,20 +297,23 @@ async def af_fixtures(key: str, day: str):
         data = await _af_get(client, "/fixtures", key, {"date": day, "timezone": "America/Sao_Paulo"})
     out = []
     for f in data.get("response", []):
-        lg = f.get("league", {})
-        if lg.get("id") not in AF_LEAGUES:
+        try:
+            lg = f.get("league", {})
+            if lg.get("id") not in AF_LEAGUES:
+                continue
+            fx = f.get("fixture", {})
+            teams = f.get("teams", {})
+            out.append({
+                "id": f"af-{fx['id']}",
+                "provider": "af",
+                "league": AF_LEAGUES[lg["id"]],
+                "kickoff_utc": fx.get("date"),
+                "status": fx.get("status", {}).get("short"),
+                "home": {"id": teams["home"]["id"], "name": teams["home"]["name"]},
+                "away": {"id": teams["away"]["id"], "name": teams["away"]["name"]},
+            })
+        except (KeyError, TypeError, ValueError):
             continue
-        fx = f.get("fixture", {})
-        teams = f.get("teams", {})
-        out.append({
-            "id": f"af-{fx['id']}",
-            "provider": "af",
-            "league": AF_LEAGUES[lg["id"]],
-            "kickoff_utc": fx.get("date"),
-            "status": fx.get("status", {}).get("short"),
-            "home": {"id": teams["home"]["id"], "name": teams["home"]["name"]},
-            "away": {"id": teams["away"]["id"], "name": teams["away"]["name"]},
-        })
     db.cache_set(ck, out, 3600)
     return out
 
@@ -271,15 +328,18 @@ async def af_team_recent(key: str, team_id: int, team_name: str):
     today = date.today()
     games = []
     for f in data.get("response", []):
-        goals = f.get("goals", {})
-        hg, ag = goals.get("home"), goals.get("away")
-        if hg is None or ag is None:
+        try:
+            goals = f.get("goals", {})
+            hg, ag = goals.get("home"), goals.get("away")
+            if hg is None or ag is None:
+                continue
+            played = dt.datetime.fromisoformat(f["fixture"]["date"].replace("Z", "+00:00")).date()
+            days_ago = (today - played).days
+            is_home = f["teams"]["home"]["id"] == team_id
+            gf, ga = (hg, ag) if is_home else (ag, hg)
+            games.append([days_ago, is_home, gf, ga])
+        except (KeyError, TypeError, ValueError):
             continue
-        played = dt.datetime.fromisoformat(f["fixture"]["date"].replace("Z", "+00:00")).date()
-        days_ago = (today - played).days
-        is_home = f["teams"]["home"]["id"] == team_id
-        gf, ga = (hg, ag) if is_home else (ag, hg)
-        games.append([days_ago, is_home, gf, ga])
     db.cache_set(ck, games, 12 * 3600)
     return games
 
@@ -294,13 +354,16 @@ async def af_odds(key: str, fixture_id: int):
     odds = {}
     try:
         bms = data["response"][0]["bookmakers"]
-    except (IndexError, KeyError):
+    except (IndexError, KeyError, TypeError):
         bms = []
     for bm in bms[:3]:
         for bet in bm.get("bets", []):
             name = bet.get("name", "")
             for v in bet.get("values", []):
-                val, odd = str(v.get("value")), float(v.get("odd", 0) or 0)
+                try:
+                    val, odd = str(v.get("value")), float(v.get("odd", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
                 mk = None
                 if name == "Match Winner":
                     mk = {"Home": "home", "Draw": "draw", "Away": "away"}.get(val)

@@ -193,13 +193,13 @@ async def _fetch_league_data(slug: str, season: int) -> dict | None:
     loop = asyncio.get_running_loop()
     fut = loop.create_future()
     _pending[key] = fut
+    data: list | None = None
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             r = await client.get(
                 f"{US_BASE}/getLeagueData/{slug}/{season}",
                 headers=US_HEADERS, timeout=US_TIMEOUT,
             )
-        data = None
         if r.status_code == 200:
             try:
                 raw = r.json()
@@ -225,17 +225,22 @@ async def _fetch_league_data(slug: str, season: int) -> dict | None:
                 data = None
         if data is not None:
             ttl = 12 * 3600 if season >= current_season() else 7 * 86400
-            db.cache_set(key, data, ttl)
-        if not fut.done():
-            fut.set_result(data)
+            try:
+                db.cache_set(key, data, ttl)
+            except Exception:
+                pass  # cache é otimização; nunca é dependência
         return data
     except Exception:
         # falha de rede/parse: todos os que esperavam seguem sem xG (fallback)
-        if not fut.done():
-            fut.set_result(None)
         return None
     finally:
+        # SEMPRE resolve a future compartilhada — inclusive em cancelamento
+        # (CancelledError não é Exception). Sem isto, quem estava esperando
+        # esta future travava PARA SEMPRE e o /api/day nunca respondia:
+        # o app "travava" no carregando das análises.
         _pending.pop(key, None)
+        if not fut.done():
+            fut.set_result(data)
 
 
 def _days_ago(dt_str: str, today: dt.date) -> int | None:
@@ -340,7 +345,6 @@ async def league_context(league_name: str, home: str, away: str,
     ms = await league_matches(league_name)
     if not ms:
         return None
-    this_season = [m for m in ms if m["days_ago"] <= 120 or True]
     # contexto: jogos da temporada corrente (últimos ~365 dias)
     recent = [m for m in ms if m["days_ago"] <= 365] or ms
     n = len(recent)

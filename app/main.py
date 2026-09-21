@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -293,7 +293,12 @@ async def _team_games(s: Settings, fx: dict, side: str, day: str):
 
 
 async def _team_games_for(s: Settings, fx: dict, day: str):
-    """Busca o histórico dos dois times, tratando erro por jogo."""
+    """Busca o histórico dos dois times, tratando erro por jogo.
+
+    v2.3.1: captura QUALQUER exceção (httpx, JSON, KeyError...). Antes só
+    ProviderError era tratado e qualquer outro erro derrubava o /api/day
+    inteiro — nenhum jogo do dia aparecia.
+    """
     try:
         hg, ag = await asyncio.gather(
             _team_games(s, fx, "home", day),
@@ -302,6 +307,8 @@ async def _team_games_for(s: Settings, fx: dict, day: str):
         return hg, ag, None
     except provider.ProviderError as e:
         return None, None, str(e)
+    except Exception as e:
+        return None, None, f"Falha ao buscar histórico: {type(e).__name__}: {e}"
 
 
 _CALIB_CACHE: dict = {"data": None}
@@ -491,18 +498,26 @@ async def day_analysis(day: str | None = None):
     # Fase 1: baixar o histórico dos times de todos os jogos do dia.
     async def fetch(fx):
         async with sem:
-            return fx, await _team_games_for(s, fx, day)
+            hg, ag, err = await _team_games_for(s, fx, day)
+            return fx, hg, ag, err
 
-    fetched = await asyncio.gather(*[fetch(fx) for fx in fixtures])
+    # return_exceptions=True: uma falha isolada vira erro DAQUELE jogo e o
+    # restante do dia é analisado normalmente (antes uma exceção qualquer em
+    # um time derrubava a resposta inteira — 500 sem nenhuma análise).
+    fetched = await asyncio.gather(*[fetch(fx) for fx in fixtures], return_exceptions=True)
 
     # Médias de gols e de xG por liga (mando/visitante) a partir do histórico
     # do dia, com shrinkage para as médias globais quando a amostra é pequena.
     pool: dict[str, list] = {}
     errors: list = []
     ready: list = []
-    for fx, (hg, ag, err) in fetched:
-        if err:
-            errors.append({**fx, "error": err})
+    for fx, res in zip(fixtures, fetched):
+        if isinstance(res, BaseException):
+            errors.append({**fx, "error": f"{type(res).__name__}: {res}"})
+            continue
+        _fx, hg, ag, err = res
+        if err or hg is None or ag is None:
+            errors.append({**fx, "error": err or "histórico indisponível"})
             continue
         pool.setdefault(fx["league"], [])
         pool[fx["league"]].extend(hg)
@@ -518,7 +533,14 @@ async def day_analysis(day: str | None = None):
             xh, xa_ = xg_priors[fx["league"]]
             return await _analyze_fixture(s, fx, hg, ag, home_avg, away_avg, xh, xa_, with_odds)
 
-    analyzed = await asyncio.gather(*[finish(fx, hg, ag) for fx, hg, ag in ready])
+    results = await asyncio.gather(
+        *[finish(fx, hg, ag) for fx, hg, ag in ready], return_exceptions=True)
+    analyzed = []
+    for (fx, _hg, _ag), res in zip(ready, results):
+        if isinstance(res, BaseException):
+            errors.append({**fx, "error": f"Falha na análise: {type(res).__name__}: {res}"})
+        else:
+            analyzed.append(res)
 
     # ranking do dia: score = prob*confiança (+EV quando há odds)
     ranked = sorted(
