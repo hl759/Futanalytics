@@ -1,5 +1,7 @@
 # FutAnalytics v2.3 "Trader Free"
 
+> **v2.3.5 (22/set/2026) — "sumiram os jogos futuros"**: (1) a football-data.org pode devolver **HTTP 200 com lista vazia** em certos problemas de plano/permissão — sem erro — e o painel mostrava "dia sem jogos" em todos os dias futuros, enquanto os passados pareciam vivos só porque ficam em cache por 7 dias. Agora o app **detecta a resposta vazia impossível** (9 dias × ~10 ligas = 0 jogos) e cai para a **rota por competição**, que devolve erro explícito quando é permissão — a causa aparece na tela em vez de silêncio; (2) **diagnóstico de etapas** na tela vazia (quantos jogos a API devolveu na janela, quantos nas ligas monitoradas) + versão do app no painel; (3) janela corrigida para **9 dias reais** (o `dateTo` da API v4 é exclusivo); (4) jogos futuros com horário `00:00:00Z` (placeholder de liga que ainda não fechou a hora) não vão mais para a véspera por causa do fuso; (5) erro definitivo de token/plano aparece na hora, sem 10 retentativas fingindo "aquecimento".
+
 Plataforma de análise diária de jogos de futebol focada em mercados de gols (Over/Under, BTTS e totais por time), com **odds reais grátis**, seleção por **equilíbrio acerto × odd**, **verificação do trader** (checklist criterioso por jogo) e **zero gravação automática**.
 
 ## O que a v2.3 acrescenta — e por quê

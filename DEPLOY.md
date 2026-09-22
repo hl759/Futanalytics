@@ -87,6 +87,27 @@ que protege suas cotas gratuitas.
   caso (Understat fora do ar), +10 s na primeira carga antes do fallback
   automático. Nada a mais: mesmo build, mesma RAM, mesmo cold start.
 
+## Problema: "só aparecem jogos passados, nenhum futuro" (v2.3.5+)
+
+Sintoma: ao escolher qualquer dia futuro da semana, "Nenhum jogo"; os dias
+passados aparecem normalmente. Causas possíveis, em ordem:
+
+1. **O serviço está rodando código antigo.** Abra
+   `https://SEU-APP.onrender.com/api/version`: se for menor que 2.3.5, o
+   deploy não pegou a correção. No painel do Render: *Manual Deploy → Clear
+   build cache & deploy*. (Dias passados podem aparecer mesmo com API
+   quebrada: ficam em cache por 7 dias no SQLite do serviço.)
+2. **Problema real no provedor** (token expirado, plano mudou, instabilidade
+   da football-data.org — que em alguns casos devolve "200 OK com lista
+   vazia" em vez de erro). Desde a v2.3.5 a tela vazia mostra o
+   **diagnóstico por etapa** ("a API devolveu 0 jogos numa janela de 9 dias")
+   e o app tenta automaticamente a rota por competição como plano B. Rode
+   também **Configurações → Testar football-data**: a mensagem diz exatamente
+   o que a API respondeu.
+3. **Cache de um momento ruim.** Um dia vazio fica guardado por só 10 min
+   (antes era 1h) — então depois de resolver o item 1 ou 2, espere ~10 min
+   ou clique em "Atualizar análise" algumas vezes.
+
 ## Alternativa sem GitHub: PythonAnywhere
 
 Se preferir não usar GitHub, o pythonanywhere.com gratuito também roda o

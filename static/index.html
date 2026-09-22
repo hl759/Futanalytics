@@ -535,7 +535,10 @@ async function loadDay(){
       DAY=await api('/api/day?day='+day);
       break;
     }catch(e){
-      const gw=/erro 502|erro 503|erro 504|Bad Gateway|Service Unavailable|Gateway Timeout|Limite de requisi|Falha de conex/i.test(e.message);
+      // Erro definitivo de provedor (token/plano/recusa) não se resolve com
+      // nova tentativa: mostra a causa na hora em vez de fingir "aquecimento".
+      const fatal=/recusou|subscription|permiss|token|chave|plano|Configure/i.test(e.message);
+      const gw=!fatal&&/erro 502|erro 503|erro 504|Bad Gateway|Service Unavailable|Gateway Timeout|Limite de requisi|Falha de conex/i.test(e.message);
       if(gw && attempt<10){
         attempt++;
         $('#dayContent').innerHTML=`<div class="loading"><div class="spin"></div><br>O servidor gratuito (Render) está aquecendo e cortou a análise no meio.<br><span class="small">Tentativa ${attempt}/10 automática em 15s. Cada tentativa aproveita o que já foi baixado; em 1 a 3 minutos o painel abre sozinho.</span></div>`;
@@ -547,7 +550,7 @@ async function loadDay(){
     }
   }
   try{
-  $('#provTag').textContent={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'';
+  $('#provTag').textContent=({demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football'}[DAY.provider]||'')+(DAY.version?` · v${DAY.version}`:'');
   if(DAY.odds_feed&&DAY.odds_feed.available){
     $('#provTag').textContent+=` · odds reais: Bet365/Pinnacle (${DAY.odds_feed.n_events} jogos no arquivo)`;
   }else if(DAY.provider!=='demo'){
@@ -562,7 +565,18 @@ async function loadDay(){
         const lab=WD[new Date(d+'T12:00:00').getDay()]+' '+d.slice(8,10)+'/'+d.slice(5,7);
         return `<button class="btn sm ghost" onclick="jumpDay('${d}')">${lab} · ${cnt[d]} jogo${cnt[d]>1?'s':''}</button>`;
       }).join('');
-      html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data${chips?`.<br><span class="small">Algumas ligas não têm rodada todo dia (ex.: segundas e quartas de semana sem rodada). Jogos nos dias próximos — toque para abrir:</span><div class="row" style="justify-content:center;margin-top:10px;gap:8px;flex-wrap:wrap">${chips}</div>`:'. Tente outra data ou outro provedor.'}</div></div>`;
+      // Diagnóstico: separa "dia sem rodada" de "a API parou de entregar".
+      // Um 0 absoluto numa janela de 9 dias com ~10 ligas ativas quase nunca é
+      // calendário real — é provedor (token/plano/instabilidade). Dias passados
+      // podem continuar aparecendo só porque ficaram cacheados por 7 dias.
+      const dbg=DAY.fixtures_debug||{};
+      let diag='';
+      if(dbg.api_matches!==undefined&&!chips){
+        const got=dbg.api_matches||0,mon=dbg.monitored_matches||0;
+        if(got===0)diag=`<div class="warn" style="margin-top:14px;text-align:left">⚠️ <b>A API devolveu 0 jogos numa janela de 9 dias (${dbg.window})</b> — isso quase nunca é calendário real: aponta para problema no provedor (token, plano ou instabilidade da API)${dbg.fallback?'. O app tentou a rota por competição como plano B e também não recebeu nada':''}. Dias passados podem continuar aparecendo só porque ficaram guardados em cache por 7 dias.<br><b>O que fazer:</b> abra Configurações → "Testar football-data" para ver a causa exata; se o teste falhar, gere um token novo em football-data.org e salve de novo.</div>`;
+        else if(mon===0)diag=`<div class="warn" style="margin-top:14px;text-align:left">⚠️ A API devolveu ${got} jogos na janela ${dbg.window}, mas <b>nenhum nas ligas monitoradas</b> — o plano do token pode ter perdido acesso às competições. Teste em Configurações → "Testar football-data".</div>`;
+      }
+      html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data${chips?`.<br><span class="small">Algumas ligas não têm rodada todo dia (ex.: segundas e quartas de semana sem rodada). Jogos nos dias próximos — toque para abrir:</span><div class="row" style="justify-content:center;margin-top:10px;gap:8px;flex-wrap:wrap">${chips}</div>`:'. Tente outra data ou outro provedor.'}${diag}</div></div>`;
     }
     else{
       html+=renderMultiple(DAY.multiple);

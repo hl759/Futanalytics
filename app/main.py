@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.3.4"
+VERSION = "2.3.5"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -494,10 +494,15 @@ async def day_analysis(day: str | None = None):
     # Dia sem jogos nas ligas monitoradas (ex.: segunda-feira sem rodada) não é
     # defeito — mas precisamos distinguir isso de uma falha. A contagem dos dias
     # vizinhos já veio na MESMA resposta do provedor fd (custo zero de cota) e
-    # deixa o painel mostrar quando os próximos jogos acontecem.
+    # deixa o painel mostrar quando os próximos jogos acontecem. O diagnóstico
+    # (quantos jogos a API devolveu em cada etapa do filtro) separa "dia sem
+    # rodada" de "a API parou de entregar" — a diferença entre esperar e agir.
     day_counts: dict = {}
-    if not fixtures and s.provider == "fd":
-        day_counts = provider.fd_day_counts(day)
+    fixtures_debug: dict = {}
+    if s.provider == "fd":
+        fixtures_debug = provider.fd_day_debug(day)
+        if not fixtures:
+            day_counts = provider.fd_day_counts(day)
 
     with_odds = s.provider in ("af", "demo")
     # limitar concorrência para respeitar rate limits
@@ -580,11 +585,13 @@ async def day_analysis(day: str | None = None):
     return {
         "day": day,
         "provider": s.provider,
+        "version": VERSION,
         "pick_mode": s.pick_mode,
         "multiple_min_grade": s.multiple_min_grade,
         "fixtures": analyzed,
         "errors": errors,
         "day_counts": day_counts,
+        "fixtures_debug": fixtures_debug,
         "best_single": best_single["id"] if best_single else None,
         "multiple": multiple,
         "bankroll": s.bankroll,
