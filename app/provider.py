@@ -555,57 +555,59 @@ async def openliga_fixtures(day: str) -> list:
         d0 = dt.date.fromisoformat(day)
     except (TypeError, ValueError):
         raise ProviderError(f"Data inválida: {day}")
-    season = _ol_current_season(d0)
+    seasons = [_ol_current_season(d0), _ol_current_season(d0) - 1]
     out = []
+    success = False
+    errors = 0
     async with httpx.AsyncClient() as client:
-        for shortcut in OPENLIGA_SHORTCUTS:
-            try:
-                data = await _ol_get(client, f"/getmatchdata/{shortcut}/{season}")
-            except ProviderError:
-                continue  # uma liga falhou, tenta próxima
-            if not isinstance(data, list):
-                continue
-            for m in data:
+        for season in seasons:
+            for shortcut in OPENLIGA_SHORTCUTS:
                 try:
-                    # OpenLigaDB tem matchDateTimeUTC (com Z) ou matchDateTime (local DE)
-                    utc_str = m.get("matchDateTimeUTC") or m.get("matchDateTime")
-                    if not utc_str:
-                        continue
-                    # normaliza para ISO com Z
-                    if not utc_str.endswith("Z") and "T" in utc_str:
-                        # matchDateTime vem sem Z, assume UTC
-                        utc_iso = utc_str + "Z" if "+" not in utc_str else utc_str
-                    else:
-                        utc_iso = utc_str
-                    # converte para dia local BR para filtrar
-                    try:
-                        local_d = _local_day(utc_iso)
-                    except Exception:
-                        # fallback: pega só a data
-                        local_d = utc_iso[:10]
-                    if local_d != day:
-                        continue
-                    t1 = m.get("team1") or {}
-                    t2 = m.get("team2") or {}
-                    t1_name = t1.get("teamName") or t1.get("shortName") or "Time A"
-                    t2_name = t2.get("teamName") or t2.get("shortName") or "Time B"
-                    league_name = OPENLIGA_LEAGUES.get(shortcut, f"Liga {shortcut}")
-                    # usa matchID como id
-                    mid = m.get("matchID") or f"{shortcut}-{t1.get('teamId')}-{t2.get('teamId')}"
-                    out.append({
-                        "id": f"ol-{mid}",
-                        "provider": "openliga",
-                        "league": league_name,
-                        "kickoff_utc": utc_iso,
-                        "status": "SCHEDULED" if m.get("matchIsFinished") is False else "FINISHED" if m.get("matchIsFinished") else "SCHEDULED",
-                        "home": {"id": t1.get("teamId", 0), "name": t1_name},
-                        "away": {"id": t2.get("teamId", 0), "name": t2_name},
-                        "_ol_shortcut": shortcut,
-                        "_ol_season": season,
-                    })
-                except (KeyError, TypeError, ValueError):
+                    data = await _ol_get(client, f"/getmatchdata/{shortcut}/{season}")
+                    success = True
+                except ProviderError:
+                    errors += 1
                     continue
-    # cache curto para dia futuro, longo para passado
+                if not isinstance(data, list):
+                    continue
+                for m in data:
+                    try:
+                        utc_str = m.get("matchDateTimeUTC") or m.get("matchDateTime")
+                        if not utc_str:
+                            continue
+                        if not utc_str.endswith("Z") and "T" in utc_str:
+                            utc_iso = utc_str + "Z" if "+" not in utc_str else utc_str
+                        else:
+                            utc_iso = utc_str
+                        try:
+                            local_d = _local_day(utc_iso)
+                        except Exception:
+                            local_d = utc_iso[:10]
+                        if local_d != day:
+                            continue
+                        t1 = m.get("team1") or {}
+                        t2 = m.get("team2") or {}
+                        t1_name = t1.get("teamName") or t1.get("shortName") or "Time A"
+                        t2_name = t2.get("teamName") or t2.get("shortName") or "Time B"
+                        league_name = OPENLIGA_LEAGUES.get(shortcut, f"Liga {shortcut}")
+                        mid = m.get("matchID") or f"{shortcut}-{t1.get('teamId')}-{t2.get('teamId')}"
+                        out.append({
+                            "id": f"ol-{mid}",
+                            "provider": "openliga",
+                            "league": league_name,
+                            "kickoff_utc": utc_iso,
+                            "status": "SCHEDULED" if m.get("matchIsFinished") is False else "FINISHED" if m.get("matchIsFinished") else "SCHEDULED",
+                            "home": {"id": t1.get("teamId", 0), "name": t1_name},
+                            "away": {"id": t2.get("teamId", 0), "name": t2_name},
+                            "_ol_shortcut": shortcut,
+                            "_ol_season": season,
+                        })
+                    except (KeyError, TypeError, ValueError):
+                        continue
+            if out:
+                break  # já achou jogos, não precisa varrer temporada anterior
+    if not success and errors > 0:
+        raise ProviderError(f"OpenLigaDB fora do ar (tentou {errors} ligas)")
     ttl = 3600 if day >= str(date.today()) else 6 * 3600
     db.cache_set(ck, out, ttl)
     return out
@@ -692,14 +694,17 @@ async def espn_fixtures(day: str) -> list:
         d0 = dt.date.fromisoformat(day)
     except (TypeError, ValueError):
         raise ProviderError(f"Data inválida: {day}")
-    # ESPN usa YYYYMMDD
     espn_date = d0.strftime("%Y%m%d")
     out = []
+    success = False
+    errors = 0
     async with httpx.AsyncClient() as client:
         for code in ESPN_CODES:
             try:
                 data = await _espn_get(client, f"/{code}/scoreboard", {"dates": espn_date})
+                success = True
             except ProviderError:
+                errors += 1
                 continue
             events = data.get("events") or []
             for ev in events:
@@ -711,18 +716,15 @@ async def espn_fixtures(day: str) -> list:
                     competitors = comp.get("competitors") or []
                     if len(competitors) < 2:
                         continue
-                    # identifica casa/fora
                     home_c = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
                     away_c = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1] if len(competitors) > 1 else competitors[0])
                     home_team = home_c.get("team") or {}
                     away_team = away_c.get("team") or {}
                     home_name = home_team.get("displayName") or home_team.get("name") or "Casa"
                     away_name = away_team.get("displayName") or away_team.get("name") or "Fora"
-                    # data UTC do evento
                     utc_iso = ev.get("date") or comp.get("date") or ""
                     if not utc_iso:
                         continue
-                    # filtra por dia local BR (ESPN já vem em UTC)
                     try:
                         local_d = _local_day(utc_iso)
                     except Exception:
@@ -742,6 +744,8 @@ async def espn_fixtures(day: str) -> list:
                     })
                 except (KeyError, TypeError, ValueError):
                     continue
+    if not success and errors > 0:
+        raise ProviderError(f"ESPN fora do ar (tentou {errors} ligas)")
     ttl = 3600 if day >= str(date.today()) else 6 * 3600
     db.cache_set(ck, out, ttl)
     return out
@@ -823,32 +827,64 @@ async def espn_team_recent(team_id: int, team_name: str) -> list:
     return games
 
 
-# Função de fallback automático: tenta fd -> openliga -> espn -> demo
+# Função de fallback automático: tenta fd -> openliga -> espn -> (vazio, não demo)
+# v2.4.1: corrige bug que fazia cair no demo em dia sem rodada genuíno.
+# Demo só é usado quando o usuário escolhe demo explicitamente ou quando TODAS
+# as fontes reais falham por erro de rede/token. Dia sem jogo mostra "Nenhum jogo"
+# com chips dos próximos dias, não jogos fake tipo "Arsenal x Fortaleza".
 async def fixtures_with_fallback(primary: str, day: str, fd_token: str = "", af_key: str = "") -> tuple[list, str, dict]:
     """
     Retorna (fixtures, provider_usado, info_fallback)
-    info_fallback: {tried: [...], used: str, fallback: bool}
+    info_fallback: {tried: [...], used: str, fallback: bool, reason: str}
     """
     tried = []
-    # 1) primário
-    if primary == "fd" and fd_token:
-        tried.append("fd")
-        try:
-            fx = await fd_fixtures(fd_token, day)
-            if fx:  # só considera sucesso se trouxe jogos
-                return fx, "fd", {"tried": tried, "used": "fd", "fallback": False}
-            # se veio vazio, tenta fallback (pode ser dia sem rodada, mas vamos tentar outras fontes)
-        except ProviderError as e:
-            # guarda erro para debug, mas continua
-            pass
-    elif primary == "af" and af_key:
-        tried.append("af")
-        try:
-            fx = await af_fixtures(af_key, day)
-            if fx:
-                return fx, "af", {"tried": tried, "used": "af", "fallback": False}
-        except ProviderError:
-            pass
+    last_error = None
+
+    # 1) primário: fd
+    if primary == "fd":
+        if not fd_token:
+            # sem token, não tenta fd — vai direto para fallbacks gratuitos
+            tried.append("fd: no-token")
+        else:
+            tried.append("fd")
+            try:
+                fx = await fd_fixtures(fd_token, day)
+                # fd_fixtures sempre retorna lista (pode ser vazia = dia sem rodada)
+                # Verifica se é falha impossível (0 jogos em 9 dias) via debug
+                if not fx:
+                    dbg = fd_day_debug(day)
+                    counts = fd_day_counts(day)
+                    api_matches = dbg.get("api_matches", -1)
+                    monitored = dbg.get("monitored_matches", -1)
+                    # 0 absoluto numa janela de 9 dias com ~10 ligas = falha, não calendário
+                    if api_matches == 0 or (api_matches == -1 and not counts):
+                        last_error = f"fd retornou 0 jogos na janela (api_matches=0) — falha"
+                        # continua para fallback
+                    else:
+                        # dia sem rodada genuíno: retorna vazio, sem fallback para demo
+                        return fx, "fd", {"tried": tried, "used": "fd", "fallback": False, "reason": "dia sem rodada"}
+                else:
+                    return fx, "fd", {"tried": tried, "used": "fd", "fallback": False}
+            except ProviderError as e:
+                last_error = str(e)
+                # continua para fallback
+
+    # 1b) primário: af
+    elif primary == "af":
+        if not af_key:
+            tried.append("af: no-key")
+        else:
+            tried.append("af")
+            try:
+                fx = await af_fixtures(af_key, day)
+                if fx:
+                    return fx, "af", {"tried": tried, "used": "af", "fallback": False}
+                else:
+                    # af retornou vazio: pode ser dia sem rodada, retorna vazio
+                    return fx, "af", {"tried": tried, "used": "af", "fallback": False, "reason": "dia sem rodada"}
+            except ProviderError as e:
+                last_error = str(e)
+
     elif primary == "demo":
         tried.append("demo")
         return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": False}
@@ -858,22 +894,33 @@ async def fixtures_with_fallback(primary: str, day: str, fd_token: str = "", af_
     try:
         fx = await openliga_fixtures(day)
         if fx:
-            return fx, "openliga", {"tried": tried, "used": "openliga", "fallback": True}
-    except ProviderError:
-        pass
+            return fx, "openliga", {"tried": tried, "used": "openliga", "fallback": True, "reason": last_error or "fd vazio, usando openliga"}
+        # se openliga retornou vazio genuíno, tenta ESPN
+    except ProviderError as e:
+        last_error = str(e)
 
     # 3) fallback ESPN (sem chave, cobre Brasileirão)
     tried.append("espn")
     try:
         fx = await espn_fixtures(day)
         if fx:
-            return fx, "espn", {"tried": tried, "used": "espn", "fallback": True}
-    except ProviderError:
-        pass
+            return fx, "espn", {"tried": tried, "used": "espn", "fallback": True, "reason": last_error or "fd/openliga vazios, usando espn"}
+    except ProviderError as e:
+        last_error = str(e)
 
-    # 4) último recurso: demo (sempre funciona)
+    # 4) Se chegou aqui, todas as fontes reais falharam por erro OU retornaram vazio genuíno
+    # Se foi erro, último recurso é demo (para nunca quebrar). Se foi vazio genuíno, retorna vazio.
+    # Distingue pelos tried: se tentamos fd e ele tinha day_counts ou debug com jogos, é vazio genuíno.
+    if primary == "fd" and fd_token:
+        dbg = fd_day_debug(day)
+        counts = fd_day_counts(day)
+        if dbg.get("api_matches", 0) > 0 or counts:
+            # dia sem rodada genuíno nas ligas monitoradas
+            return [], "fd", {"tried": tried, "used": "fd", "fallback": False, "reason": "dia sem rodada, sem fallback demo"}
+
+    # Todas falharam por erro de rede/token: último recurso demo (antes mostrava fake sem aviso, agora com aviso claro)
     tried.append("demo")
-    return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": True}
+    return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": True, "reason": last_error or "todas as fontes reais falharam"}
 
 
 # ---------------------------------------------------------------- demo

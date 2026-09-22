@@ -573,7 +573,11 @@ async function loadDay(){
   }
     let html='';
     if(DAY.fallback&&DAY.fallback.fallback){
-      html+=`<div class="warn">⚠️ Fallback ativo: provedor principal (${DAY.requested_provider||'fd'}) falhou ou veio vazio. O app usou automaticamente <b>${DAY.provider}</b> (tentou: ${(DAY.fallback.tried||[]).join(' → ')}). Se isso se repetir, teste as fontes em Configurações.</div>`;
+      if(DAY.provider==='demo'){
+        html+=`<div class="warn">⚠️ <b>Todas as fontes reais falharam</b> (tentou: ${(DAY.fallback.tried||[]).join(' → ')}). O app usou <b>dados de demonstração</b> para não quebrar.<br><span class="small">Causa: ${DAY.fallback.reason||'sem detalhes'}.<br>→ Teste em Configurações: "Testar football-data", "Testar OpenLigaDB", "Testar ESPN". Se o token expirou, gere um novo em football-data.org/client/register e salve.</span></div>`;
+      }else{
+        html+=`<div class="card" style="border-color:var(--blue)"><span class="pill blue">fallback</span> Provedor principal (${DAY.requested_provider||'fd'}) não trouxe jogos. Usando automaticamente <b>${DAY.provider}</b> (tentou: ${(DAY.fallback.tried||[]).join(' → ')}).<span class="small"> ${DAY.fallback.reason||''}</span></div>`;
+      }
     }
     if(DAY.provider==='demo'&&!(DAY.fallback&&DAY.fallback.fallback))html+=`<div class="warn">Você está no modo demonstração com dados simulados. Configure uma chave gratuita em Configurações para analisar jogos reais do dia.</div>`;
     if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;
