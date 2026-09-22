@@ -126,33 +126,26 @@ BR_TZ = dt.timezone(dt.timedelta(hours=-3))  # America/Sao_Paulo
 
 
 def _local_day(utc_iso: str) -> str:
-    """Converte kickoff UTC para a data local do Brasil (UTC-3)."""
+    """Converte kickoff UTC para a data local do Brasil (UTC-3).
+
+    Jogos FUTUROS sem horário fechado pela liga chegam da API marcados
+    "T00:00:00Z" (hora placeholder). Converter 00:00 UTC para UTC-3 jogava o
+    jogo para a VÉSPERA — o jogo de sábado aparecia na sexta (ou "sumia" do
+    dia certo). Hora placeholder fica na data oficial que a própria API marca.
+    Jogos reais a 00:00 UTC praticamente não existem nas ligas monitoradas.
+    """
     d = dt.datetime.fromisoformat(utc_iso.replace("Z", "+00:00"))
+    if (d.hour, d.minute, d.second) == (0, 0, 0):
+        return str(d.date())
     return str(d.astimezone(BR_TZ).date())
 
 
-async def fd_fixtures(token: str, day: str):
-    key = f"fd:fixtures:v3:{day}"
-    cached = db.cache_get(key)
-    if cached is not None:
-        return cached
-    # Janela de 9 dias: (1) o dateTo da API se comporta como limite aberto em
-    # consultas de dia único e jogos noturnos no Brasil caem no dia seguinte em
-    # UTC; (2) MESMO CUSTO DE COTA (1 requisição) e o painel ganha a contagem de
-    # jogos de todos os dias da semana — dia sem rodada deixa de ser um beco sem
-    # saída: mostramos QUANDO os próximos jogos acontecem.
-    try:
-        d0 = dt.date.fromisoformat(day)
-    except (TypeError, ValueError):
-        raise ProviderError(f"Data inválida: {day!r}. Use o formato AAAA-MM-DD.")
-    async with httpx.AsyncClient() as client:
-        data = await _fd_get(
-            client, "/matches", token,
-            {"dateFrom": str(d0 - timedelta(days=4)), "dateTo": str(d0 + timedelta(days=4))},
-        )
+def _fd_collect(matches: list, day: str) -> tuple[list, dict, int]:
+    """Filtra as partidas da API: (jogos do dia pedido, contagem por dia, nº na janela)."""
     out = []
     counts: dict[str, int] = {}
-    for m in data.get("matches", []):
+    monitored = 0
+    for m in matches or []:
         try:
             code = m.get("competition", {}).get("code")
             if code not in FD_COMPETITIONS:
@@ -160,6 +153,7 @@ async def fd_fixtures(token: str, day: str):
             utc = m.get("utcDate")
             if not utc:
                 continue
+            monitored += 1
             local_d = _local_day(utc)
             counts[local_d] = counts.get(local_d, 0) + 1
             if local_d != day:
@@ -175,19 +169,102 @@ async def fd_fixtures(token: str, day: str):
             })
         except (KeyError, TypeError, ValueError):
             continue  # jogo mal formado na API: pula, não derruba o dia
-    ttl = 3600 if day >= str(date.today()) else 7 * 86400
+    return out, counts, monitored
+
+
+async def _fd_fixtures_by_competition(client: httpx.AsyncClient, token: str,
+                                      d0: dt.date, day: str) -> tuple[list, dict]:
+    """Plano B: busca /competitions/{code}/matches, UMA liga por vez.
+
+    Acionado quando a resposta global /matches veio estranhamente vazia (a API
+    devolve HTTP 200 com lista vazia em alguns problemas de permissão/plano —
+    sem erro — e o painel mostrava "dia sem jogos" em TODOS os dias futuros,
+    enquanto os passados pareciam funcionar por estarem cacheados 7 dias).
+    O endpoint por competição devolve 403 explícito nesses casos, que o app
+    transforma em mensagem clara em vez de silêncio.
+    """
+    out: list = []
+    counts: dict[str, int] = {}
+    for code in FD_COMPETITIONS:
+        try:
+            data = await _fd_get(
+                client, f"/competitions/{code}/matches", token,
+                {"dateFrom": str(d0 - timedelta(days=4)),
+                 "dateTo": str(d0 + timedelta(days=5))},
+            )
+        except ProviderError:
+            raise  # 403/bloqueio de plano tem que virar mensagem visível
+        fx, cnt, _m = _fd_collect(data.get("matches", []), day)
+        out.extend(fx)
+        for d, n in cnt.items():
+            counts[d] = counts.get(d, 0) + n
+    return out, counts
+
+
+async def fd_fixtures(token: str, day: str):
+    key = f"fd:fixtures:v4:{day}"
+    cached = db.cache_get(key)
+    if cached is not None:
+        return cached
+    # Janela ampla ao redor do dia: (1) o dateTo da API é EXCLUSIVO (não inclui
+    # o próprio dia — por isso o +5 para cobrir ±4 dias de verdade); (2) jogos
+    # noturnos no Brasil caem no dia seguinte em UTC; (3) MESMO CUSTO DE COTA
+    # (1 requisição) e o painel ganha a contagem de jogos de todos os dias da
+    # semana — dia sem rodada deixa de ser um beco sem saída: mostramos QUANDO
+    # os próximos jogos acontecem.
+    try:
+        d0 = dt.date.fromisoformat(day)
+    except (TypeError, ValueError):
+        raise ProviderError(f"Data inválida: {day!r}. Use o formato AAAA-MM-DD.")
+    dbg = {"endpoint": "/matches",
+           "window": f"{d0 - timedelta(days=4)} a {d0 + timedelta(days=4)}",
+           "fallback": False}
+    async with httpx.AsyncClient() as client:
+        data = await _fd_get(
+            client, "/matches", token,
+            {"dateFrom": str(d0 - timedelta(days=4)),
+             "dateTo": str(d0 + timedelta(days=5)),  # dateTo é EXCLUSIVO (doc v4)
+             "limit": 500},
+        )
+        matches = data.get("matches", []) or []
+        res_count = ((data.get("resultSet") or {}).get("count"))
+        out, counts, monitored = _fd_collect(matches, day)
+        dbg.update(api_matches=len(matches), api_reported_count=res_count,
+                   monitored_matches=monitored, day_matches=len(out))
+        # Resposta vazia numa janela de 9 dias com ~10 ligas ativas é quase
+        # impossível de ser verdade — muito mais provável ser permissão/plano
+        # resolvido em silêncio pela API (ou truncamento: resultSet.count maior
+        # que o número de jogos devolvidos). Plano B: por competição.
+        truncated = isinstance(res_count, int) and res_count > len(matches)
+        if not out and (not matches or truncated):
+            dbg["fallback"] = True
+            dbg["fallback_reason"] = ("truncada" if truncated else "vazia")
+            out, counts = await _fd_fixtures_by_competition(client, token, d0, day)
+            dbg["day_matches"] = len(out)
+    # Resultado vazio (dia sem rodada genuíno) expira rápido: se a agenda muda
+    # (jogo remarcado/criado), o painel percebe em minutos, não em horas.
+    if out:
+        ttl = 3600 if day >= str(date.today()) else 7 * 86400
+    else:
+        ttl = 600
     db.cache_set(key, out, ttl)
     # Contagem de jogos por dia da JANELA (mesma resposta da API: custo zero em
     # cota). Dias sem rodada nas ligas monitoradas (ex.: segunda-feira) não são
     # defeito — o painel usa estas contagens para mostrar quando voltam a haver
     # jogos em vez de um "nenhum jogo" que parece quebra.
     db.cache_set(f"fd:daycounts:v1:{day}", counts, ttl)
+    db.cache_set(f"fd:debug:v1:{day}", dbg, ttl)
     return out
 
 
 def fd_day_counts(day: str) -> dict:
     """Jogos por dia na janela já baixada do dia pedido (só cache; não gasta cota)."""
     return db.cache_get(f"fd:daycounts:v1:{day}") or {}
+
+
+def fd_day_debug(day: str) -> dict:
+    """Diagnóstico de etapas do dia pedido (só cache; alimenta a tela vazia)."""
+    return db.cache_get(f"fd:debug:v1:{day}") or {}
 
 
 async def fd_team_recent(token: str, team_id: int, team_name: str):
