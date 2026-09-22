@@ -1,5 +1,7 @@
-# FutAnalytics v2.3 "Trader Free"
+# FutAnalytics v2.4 "Fallback"
 
+> **v2.4.0 (22/set/2026) — "fallback automático"**: (1) **Novo: OpenLigaDB + ESPN como fallback grátis sem chave** — se a `football-data.org` falhar, devolver lista vazia ou estourar cota, o app tenta automaticamente OpenLigaDB (Bundesliga, Champions) e depois ESPN (Brasileirão, Libertadores, PL, La Liga etc) antes de cair no demo. Você nunca fica sem jogos por instabilidade de uma API só; (2) diagnóstico de fallback no painel (mostra `pediu fd → usou openliga`); (3) botões de teste para OpenLigaDB e ESPN em Configurações.
+>
 > **v2.3.5 (22/set/2026) — "sumiram os jogos futuros"**: (1) a football-data.org pode devolver **HTTP 200 com lista vazia** em certos problemas de plano/permissão — sem erro — e o painel mostrava "dia sem jogos" em todos os dias futuros, enquanto os passados pareciam vivos só porque ficam em cache por 7 dias. Agora o app **detecta a resposta vazia impossível** (9 dias × ~10 ligas = 0 jogos) e cai para a **rota por competição**, que devolve erro explícito quando é permissão — a causa aparece na tela em vez de silêncio; (2) **diagnóstico de etapas** na tela vazia (quantos jogos a API devolveu na janela, quantos nas ligas monitoradas) + versão do app no painel; (3) janela corrigida para **9 dias reais** (o `dateTo` da API v4 é exclusivo); (4) jogos futuros com horário `00:00:00Z` (placeholder de liga que ainda não fechou a hora) não vão mais para a véspera por causa do fuso; (5) erro definitivo de token/plano aparece na hora, sem 10 retentativas fingindo "aquecimento".
 
 Plataforma de análise diária de jogos de futebol focada em mercados de gols (Over/Under, BTTS e totais por time), com **odds reais grátis**, seleção por **equilíbrio acerto × odd**, **verificação do trader** (checklist criterioso por jogo) e **zero gravação automática**.
@@ -34,15 +36,19 @@ python3 -m app.backtest --train 2324 2425 --test 2526 --fit-calibration --report
 
 Mede Brier/LogLoss vs. mercado, tabela de calibração, teste de alfa, ROI das estratégias (flat e Kelly) e CLV contra a odd de fechamento. Cache em `data_cache/`.
 
-## Fontes de dados
+## Fontes de dados (v2.4 com fallback automático)
 
-| Provedor | Custo | Cobertura | Odds |
-|---|---|---|---|
-| Demonstração | nenhum | dados simulados | simuladas |
-| football-data.org | grátis (token) | Brasileirão A, Champions, top 5 Europa, Portugal, Holanda, Championship | não |
-| **football-data.co.uk** (novo) | grátis, sem chave | ~22 ligas europeias (próximas rodadas) | **sim: B365 + Pinnacle** |
-| API-Football (api-sports.io) | pago p/ temporada atual | Série A/B, Copa do Brasil, Libertadores + Europa | sim |
-| Understat | grátis, sem chave | xG histórico: Premier, La Liga, Bundesliga, Serie A, Ligue 1 | — |
+| Provedor | Custo | Cobertura | Odds | Papel |
+|---|---|---|---|---|
+| Demonstração | nenhum | dados simulados | simuladas | Último recurso (sempre funciona) |
+| football-data.org | grátis (token) | Brasileirão A, Champions, top 5 Europa, Portugal, Holanda, Championship | não | **Principal** |
+| **OpenLigaDB** (novo) | grátis, **sem chave** | Bundesliga, 2. Bundesliga, Champions | não | **Fallback 1** automático, sem cota |
+| **ESPN** (novo) | grátis, **sem chave** | Brasileirão A/B, Copa do Brasil, Libertadores, PL, La Liga, Serie A, Bundesliga | não | **Fallback 2** automático, cobre Brasil |
+| **football-data.co.uk** | grátis, sem chave | ~22 ligas europeias (próximas rodadas) | **sim: B365 + Pinnacle** | Odds reais |
+| API-Football (api-sports.io) | pago p/ temporada atual | Série A/B, Copa do Brasil, Libertadores + Europa | sim | Alternativa paga |
+| Understat | grátis, sem chave | xG histórico: Premier, La Liga, Bundesliga, Serie A, Ligue 1 | — | xG |
+
+**Como funciona o fallback (v2.4):** `fd --falha/vazio--> openliga --falha--> espn --falha--> demo`. Se o principal falhar, o painel mostra `fallback automático: pediu fd → usou openliga`. Você nunca fica sem jogos. Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs.
 
 Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs. Sem uso pago, todas as fontes do dia a cabo.
 
