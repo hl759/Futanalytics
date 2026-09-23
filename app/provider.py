@@ -88,35 +88,13 @@ ESPN_LEAGUES = {
     "por.1": "Primeira Liga (Portugal)",
     "ned.1": "Eredivisie",
     "eng.2": "Championship (Inglaterra)",
-    "usa.1": "MLS (EUA)",  # continua na Data FIFA
-    "mex.1": "Liga MX (México)",  # continua na Data FIFA
-    "arg.1": "Liga Profesional (Argentina)",  # continua na Data FIFA
     "uefa.champions": "Champions League",
     "conmebol.libertadores": "Libertadores",
     "conmebol.sudamericana": "Libertadores",
     "bra.copa": "Copa do Brasil",
-    "uefa.nations": "Liga das Nações",  # Data FIFA
-    "fifa.friendly": "Amistosos Seleções",  # Brasil x Austrália etc
 }
 
 ESPN_CODES = ["bra.1", "eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "por.1", "ned.1", "eng.2", "uefa.champions", "conmebol.libertadores"]
-# Códigos que continuam na Data FIFA (21/09 a 06/10) - melhores alternativas
-ESPN_FIFA_CODES = ["bra.1", "usa.1", "mex.1", "arg.1", "eng.2", "uefa.nations", "fifa.friendly"]
-# Todos os códigos para modo normal + FIFA
-ESPN_ALL_CODES = list(dict.fromkeys(ESPN_CODES + ESPN_FIFA_CODES))
-
-# Janela da Super Data FIFA 2026: 21/09 a 06/10 (16 dias, 4 jogos seleções)
-# Fonte: FIFA International Match Calendar 2026
-FIFA_2026_START = date(2026, 9, 21)
-FIFA_2026_END = date(2026, 10, 6)
-
-def is_fifa_window(day: str | date) -> bool:
-    """Verifica se o dia está dentro da Super Data FIFA 2026."""
-    try:
-        d = day if isinstance(day, date) else date.fromisoformat(day)
-    except (TypeError, ValueError):
-        return False
-    return FIFA_2026_START <= d <= FIFA_2026_END
 
 
 class ProviderError(Exception):
@@ -707,9 +685,7 @@ async def _espn_get(client: httpx.AsyncClient, path: str, params=None):
         raise ProviderError(f"ESPN falhou: {e}")
 
 async def espn_fixtures(day: str) -> list:
-    """Busca jogos do dia na ESPN (grátis, sem chave). Cobre Brasileirão, PL, La Liga etc.
-    Durante Data FIFA, foca nas melhores ligas que continuam: MLS, Liga MX, Argentina, Championship + 2 jogos Brasileirão atrasados + Liga das Nações.
-    """
+    """Busca jogos do dia na ESPN (grátis, sem chave). Cobre Brasileirão, PL, La Liga etc."""
     ck = f"espn:fixtures:v2:{day}"
     cached = db.cache_get(ck)
     if cached is not None:
@@ -722,10 +698,8 @@ async def espn_fixtures(day: str) -> list:
     out = []
     success = False
     errors = 0
-    # Durante Data FIFA, usa só as ligas que continuam (melhores alternativas)
-    codes = ESPN_FIFA_CODES if is_fifa_window(d0) else ESPN_ALL_CODES
     async with httpx.AsyncClient() as client:
-        for code in codes:
+        for code in ESPN_CODES:
             try:
                 data = await _espn_get(client, f"/{code}/scoreboard", {"dates": espn_date})
                 success = True
