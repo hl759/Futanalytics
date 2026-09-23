@@ -436,9 +436,13 @@ function goalsBlock(a){
     <div style="margin:10px 0 6px;display:flex;gap:6px;flex-wrap:wrap">
       ${tt('ht_0.5','Casa marca 0.5+')} ${tt('at_0.5','Fora marca 0.5+')} ${tt('ht_1.5','Casa 1.5+')} ${tt('at_1.5','Fora 1.5+')}
       ${a.joint_model?'<span class="pill amber" title="λ ajustado por adversário (modelo conjunto da liga)">ajustado p/ adversário</span>':''}
+      ${a.fatigue_home&&a.fatigue_home.fatigue_level>=2?'<span class="pill red" title="Fadiga avançada detectada">fadiga</span>':''}
+      ${a.xg_reg_home&&Math.abs(a.xg_reg_home.atk_delta)>2.5?'<span class="pill amber" title="Regressão de finalização xG vs gols">xG regressão</span>':''}
     </div>
     ${trend(a.trends_home,'casa')}
     ${trend(a.trends_away,'fora')}
+    ${a.fatigue_home?`<div class="stat small" style="margin-top:6px">🔋 Fadiga: casa <b>${a.fatigue_home.games_7}j/7d, ${a.fatigue_home.games_14}j/14d, desc ${a.fatigue_home.rest}d (${a.fatigue_home.fatigue_label})</b> · fora <b>${a.fatigue_away.games_7}j/7d, ${a.fatigue_away.games_14}j/14d, desc ${a.fatigue_away.rest}d (${a.fatigue_away.fatigue_label})</b></div>`:''}
+    ${a.xg_reg_home&&a.xg_reg_home.n_xg>=4?`<div class="stat small">📊 xG vs Gols (10j): casa <b>${a.xg_reg_home.atk_delta>0?'+':''}${a.xg_reg_home.atk_delta} atk, ${a.xg_reg_home.def_delta>0?'+':''}${a.xg_reg_home.def_delta} def (${a.xg_reg_home.regression})</b> · fora <b>${a.xg_reg_away.atk_delta>0?'+':''}${a.xg_reg_away.atk_delta}, ${a.xg_reg_away.def_delta>0?'+':''}${a.xg_reg_away.def_delta} (${a.xg_reg_away.regression})</b></div>`:''}
     ${env}
     ${h2h}
   </div>`;
@@ -525,7 +529,7 @@ function renderMultiple(m){
       ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span>${l.anchor?'<span class="pill gray">âncora</span>':''}<span class="oddtag">@${l.odd.toFixed(2)}</span>${kindPill(l.odd_kind)}${legGradePill(l.grade)}<span class="small">${pct(l.prob)}</span></div>`).join('')}
     </div>
     <div class="row">
-      <span class="stat">Probabilidade combinada: <b>${pct(m.combined_prob)}</b></span>
+      <span class="stat">Probabilidade combinada: <b>${pct(m.combined_prob)}</b>${m.combined_prob_adj&&m.correlation_penalty<1?` → ajustada <b>${pct(m.combined_prob_adj)}</b> <span class="pill red" title="${(m.correlation_detail||[]).join("; ")}">correlação -${Math.round((1-m.correlation_penalty)*100)}%</span>`:``}</span>
       ${m.stake&&m.stake.stake>0?`<span class="pill blue">stake sugerida ${fmt(m.stake.stake)} (${m.stake.pct}%)</span>`:'<span class="pill gray">sem odds reais para dimensionar stake</span>'}
       <span class="spacer"></span>
       <button class="btn sm" onclick="saveMultiple()">Registrar múltipla</button>

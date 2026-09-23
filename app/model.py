@@ -261,14 +261,54 @@ def analyze_match(home: TeamSample, away: TeamSample,
     st_h = home.strengths(home_avg, away_avg, xg_home_avg, xg_away_avg)
     st_a = away.strengths(home_avg, away_avg, xg_home_avg, xg_away_avg)
 
+    # v2.4.4: métricas secretas (fadiga + regressão xG) — zero custo extra, só TeamSample
+    fatigue_home = _fatigue_metrics(home)
+    fatigue_away = _fatigue_metrics(away)
+    xg_reg_home = _xg_deltas(home)
+    xg_reg_away = _xg_deltas(away)
+
     if lam_override is not None:
-        # λ do modelo conjunto (ajustado por adversário no nível da liga)
         lam_home, lam_away = lam_override
         xg_w_eff = 1.0
     else:
         ah_atk, ah_def, aw_atk, aw_def, xg_w_eff = _blend_strength(st_h, st_a, xg_weight)
         lam_home = home_avg * ah_atk * aw_def
         lam_away = away_avg * aw_atk * ah_def
+
+    # v2.4.4 ajustes pro: fadiga reduz λ, regressão xG corrige overperformance
+    def _fatigue_factor(f):
+        lvl = f["fatigue_level"]
+        if lvl >= 3:
+            return 0.92
+        if lvl == 2:
+            return 0.95
+        if lvl == 1:
+            return 0.98
+        return 1.0
+
+    lam_home *= _fatigue_factor(fatigue_home)
+    lam_away *= _fatigue_factor(fatigue_away)
+
+    def _regression_factor(atk_delta, def_delta_opp):
+        f = 1.0
+        if atk_delta > 3.0:
+            f *= 0.94
+        elif atk_delta > 1.8:
+            f *= 0.97
+        elif atk_delta < -3.0:
+            f *= 1.06
+        elif atk_delta < -1.8:
+            f *= 1.03
+        if def_delta_opp < -2.5:
+            f *= 1.05
+        elif def_delta_opp > 2.5:
+            f *= 0.95
+        return max(0.85, min(f, 1.15))
+
+    if xg_reg_home["n_xg"] >= 4 and xg_reg_away["n_xg"] >= 4:
+        lam_home *= _regression_factor(xg_reg_home["atk_delta"], xg_reg_away["def_delta"])
+        lam_away *= _regression_factor(xg_reg_away["atk_delta"], xg_reg_home["def_delta"])
+
     lam_home = min(max(lam_home, P["LAMBDA_HOME_MIN"]), P["LAMBDA_HOME_MAX"])
     lam_away = min(max(lam_away, P["LAMBDA_AWAY_MIN"]), P["LAMBDA_AWAY_MAX"])
 
@@ -340,6 +380,10 @@ def analyze_match(home: TeamSample, away: TeamSample,
         "joint_model": lam_override is not None,
         "trends_home": _goal_trends(home),
         "trends_away": _goal_trends(away),
+        "fatigue_home": fatigue_home,
+        "fatigue_away": fatigue_away,
+        "xg_reg_home": xg_reg_home,
+        "xg_reg_away": xg_reg_away,
     }
 
 
@@ -360,6 +404,65 @@ def _goal_trends(ts: TeamSample) -> dict:
         "btts_rate": round(sum(1 for g in games if g[2] > 0 and g[3] > 0) / n, 2),
         "failed_to_score": sum(1 for g in games if g[2] == 0),
         "clean_sheets": sum(1 for g in games if g[3] == 0),
+    }
+
+
+# ------------------------------------------------------------------ v2.4.4: segredos dos grandes players (Render free)
+# 1) Fadiga avançada: densidade de jogos 7/14d + descanso curto
+# 2) Regressão de finalização: gols vs xG (overperformance regride)
+# Tudo com dados já existentes (TeamSample), zero chamada extra, zero dep nova.
+
+def _fatigue_metrics(ts: TeamSample) -> dict:
+    """Mede congestionamento: jogos nos últimos 7/14 dias e descanso curto.
+    Retorna dict com counts e nível de fadiga.
+    """
+    games = sorted(ts._normalize(), key=lambda g: g[0])  # mais recente primeiro (menor days_ago)
+    if not games:
+        return {"games_7": 0, "games_14": 0, "rest": None, "fatigue_level": 0, "fatigue_label": "ok"}
+    rest = games[0][0]
+    games_7 = sum(1 for g in games if g[0] <= 7)
+    games_14 = sum(1 for g in games if g[0] <= 14)
+    # nível: 0=ok, 1=atenção, 2=pesado, 3=extremo
+    level = 0
+    if games_7 >= 3 or rest <= 2:
+        level = 3
+    elif games_7 == 2 or games_14 >= 4 or rest <= 3:
+        level = 2
+    elif games_14 >= 3 or rest <= 4:
+        level = 1
+    label = ["ok", "atenção", "pesado", "extremo"][level]
+    return {"games_7": games_7, "games_14": games_14, "rest": rest, "fatigue_level": level, "fatigue_label": label}
+
+
+def _xg_deltas(ts: TeamSample) -> dict:
+    """Regressão de finalização: quanto o time marcou acima/abaixo do xG.
+    Retorna deltas de ataque e defesa nos últimos 10 jogos com xG.
+    Positivo = marcou mais que xG (sorte, tende a cair) ou sofreu mais que xGA (azar).
+    """
+    games = sorted(ts._normalize(), key=lambda g: g[0])[:12]
+    xg_games = [g for g in games if g[4] is not None and g[5] is not None]
+    if len(xg_games) < 4:
+        return {"n_xg": len(xg_games), "atk_delta": 0.0, "def_delta": 0.0, "net_delta": 0.0, "regression": "ok"}
+    atk_delta = sum(g[2] - g[4] for g in xg_games[:10])  # gols feitos - xG feitos
+    def_delta = sum(g[3] - g[5] for g in xg_games[:10])  # gols sofridos - xGA
+    net = atk_delta - def_delta  # positivo = time com sorte geral
+    # classifica
+    if atk_delta > 3.5:
+        reg = "overperform ataque (regressão provável)"
+    elif atk_delta < -3.5:
+        reg = "underperform ataque (melhora provável)"
+    elif def_delta < -2.5:
+        reg = "defesa sortuda (piora provável)"
+    elif def_delta > 2.5:
+        reg = "defesa azarada (melhora provável)"
+    else:
+        reg = "ok"
+    return {
+        "n_xg": len(xg_games),
+        "atk_delta": round(atk_delta, 2),
+        "def_delta": round(def_delta, 2),
+        "net_delta": round(net, 2),
+        "regression": reg,
     }
 
 
@@ -606,8 +709,34 @@ def build_multiple(analyzed: list, settings) -> dict | None:
     for l in legs:
         comb_prob *= l["prob"]
 
+    # v2.4.4: penalidade de correlação oculta (segredo dos grandes players)
+    # 2 pernas mesma liga + mesmo family (over/over ou btts/btts) = -8% prob
+    # 3+ mesma liga = -15%, 2+ mesma liga qualquer = -5%
+    # Isso evita múltipla com 3 overs da PL no mesmo horário (chuva, vento, arbitragem correlaciona)
+    corr_penalty = 1.0
+    corr_detail = []
+    from collections import Counter
+    league_counts = Counter(l["league"] for l in legs)
+    for lg, cnt in league_counts.items():
+        if cnt >= 3:
+            corr_penalty *= 0.85
+            corr_detail.append(f"{lg}: 3+ pernas (-15%)")
+        elif cnt == 2:
+            # verifica se são do mesmo family
+            fam_in_lg = [l["market"] for l in legs if l["league"] == lg]
+            # simplifica: se ambos over ou ambos btts
+            over_cnt = sum(1 for m in fam_in_lg if m.startswith("over_"))
+            btts_cnt = sum(1 for m in fam_in_lg if m.startswith("btts"))
+            if over_cnt >= 2 or btts_cnt >= 2:
+                corr_penalty *= 0.92
+                corr_detail.append(f"{lg}: 2 overs/btts (-8%)")
+            else:
+                corr_penalty *= 0.95
+                corr_detail.append(f"{lg}: 2 pernas mesma liga (-5%)")
+    comb_prob_adj = comb_prob * corr_penalty
+
     real = all(l["ev"] is not None for l in legs)
-    ev = round(comb_prob * comb_odd - 1, 4) if real else None
+    ev = round(comb_prob_adj * comb_odd - 1, 4) if real else None
     # stake FIXA sugerida: Kelly não se aplica ao modo acerto (sem edge medido)
     stake = flat_stake(settings.bankroll, settings.stake_cap_pct, fraction=0.5)
     n_real = sum(1 for l in legs if l.get("odd_kind") == "real")
@@ -616,6 +745,9 @@ def build_multiple(analyzed: list, settings) -> dict | None:
         "legs": legs,
         "combined_odd": round(comb_odd, 2),
         "combined_prob": round(comb_prob, 4),
+        "combined_prob_adj": round(comb_prob_adj, 4),
+        "correlation_penalty": round(corr_penalty, 3),
+        "correlation_detail": corr_detail,
         "ev": ev,
         "stake": stake,
         "target_odd": round(target, 2),
@@ -786,6 +918,43 @@ def trader_checklist(analysis: dict, pick: dict | None, odds_devig: dict | None,
             st = "ok" if o <= 0.44 else ("warn" if o <= 0.52 else "bad")
         items.append({"item": "Perfil da liga", "state": st,
                       "detail": f"média {env.get('avg_goals', '—')} gols/jogo · Over 2.5 em {o*100:.0f}%"})
+
+    # 8) v2.4.4: densidade de jogos / fadiga avançada (segredo pro)
+    fh = analysis.get("fatigue_home") or {}
+    fa = analysis.get("fatigue_away") or {}
+    if fh and fa:
+        lvl = max(fh.get("fatigue_level", 0), fa.get("fatigue_level", 0))
+        if lvl >= 3:
+            st = "bad"
+        elif lvl == 2:
+            st = "warn"
+        else:
+            st = "ok"
+        # detalhe combina os dois times
+        det = f"casa: {fh.get('games_7',0)}j/7d, {fh.get('games_14',0)}j/14d, desc {fh.get('rest','?')}d · fora: {fa.get('games_7',0)}j/7d, {fa.get('games_14',0)}j/14d, desc {fa.get('rest','?')}d"
+        if lvl >= 2:
+            det += " — ataque deve cair 5-8%"
+        items.append({"item": "Densidade de jogos (fadiga)", "state": st, "detail": det})
+
+    # 9) v2.4.4: regressão de finalização xG vs gols (segredo Pinnacle)
+    xh = analysis.get("xg_reg_home") or {}
+    xa = analysis.get("xg_reg_away") or {}
+    if xh.get("n_xg", 0) >= 4 and xa.get("n_xg", 0) >= 4:
+        # se algum time está com overperformance grande, é alerta
+        big_atk = abs(xh.get("atk_delta", 0)) > 2.5 or abs(xa.get("atk_delta", 0)) > 2.5
+        big_def = abs(xh.get("def_delta", 0)) > 2.0 or abs(xa.get("def_delta", 0)) > 2.0
+        if big_atk or big_def:
+            # se o time overperformou e a perna é over, é contraindicação
+            overperf_home = xh.get("atk_delta", 0) > 2.5
+            overperf_away = xa.get("atk_delta", 0) > 2.5
+            if side == "over" and (overperf_home or overperf_away):
+                st = "warn"
+            elif side == "under" and (xh.get("atk_delta", 0) < -2.5 or xa.get("atk_delta", 0) < -2.5):
+                st = "warn"
+            else:
+                st = "ok"
+            det = f"casa: {xh.get('atk_delta',0):+g} gols vs xG ({xh.get('regression')}) · fora: {xa.get('atk_delta',0):+g} ({xa.get('regression')})"
+            items.append({"item": "Regressão xG vs gols", "state": st, "detail": det})
 
     weights = {"ok": 2.0, "warn": 1.0, "bad": 0.0}
     total_w = sum(weights[i["state"]] for i in items)

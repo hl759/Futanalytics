@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.4.3"
+VERSION = "2.4.4"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 

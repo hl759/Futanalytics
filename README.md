@@ -1,5 +1,7 @@
-# FutAnalytics v2.4.3 "Só principais"
+# FutAnalytics v2.4.4 "Segredos Pro — Render Free"
 
+> **v2.4.4 (23/set/2026) — "3 segredos dos grandes players que cabem no free"**: (1) **Fadiga avançada**: conta jogos nos últimos 7/14 dias + descanso curto (3j/7d = -8% λ, 2j/7d = -5%) — dado já existente em TeamSample, zero chamada extra. Mostra no card `🔋 Fadiga: casa 2j/7d...` + pill vermelha + item no checklist "Densidade de jogos". (2) **Regressão de finalização xG vs Gols**: time que fez +3.5 gols acima do xG nos últimos 10 vai regredir — reduz λ 6%, underperform aumenta 6%. Usa xG já baixado do Understat. Mostra `📊 xG vs Gols: +3.2 atk (overperform ataque)` + pill amarela + item "Regressão xG vs gols". (3) **Correlação oculta da múltipla**: 2 overs mesma liga = -8% prob combinada, 3+ mesma liga = -15% — evita múltipla com 3 overs PL no mesmo horário (chuva correlaciona). Mostra `ajustada 62% → correlação -8%`. Tudo em `model.py` apenas, sem nova dep, mesma RAM, seguro Render free.
+>
 > **v2.4.3 (23/set/2026) — "remove secundárias"**: Experiência ruim analisando jogos secundários alternativos (MLS, Liga MX, Argentine, Nations, amistosos, Championship) adicionados na v2.4.2. Removidas do app: ESPN agora busca apenas **principais** (Brasileirão A, PL, La Liga, Serie A, Bundesliga, Ligue 1, Champions, Copa do Brasil, Libertadores). Sem tocar no motor/IA (model.py/joint.py/calibration.py intactos), sem nova dependência, seguro Render free. Durante Data FIFA o app mostra dia vazio com chips dos próximos dias em vez de forçar análise ruim.
 >
 > **v2.4.1 (23/set/2026) — "demo não invade dia vazio"**: corrige bug que fazia cair no demo com jogos fake tipo "Arsenal x Fortaleza" em dia genuinamente sem rodada. Agora distingue falha vs vazio: `fd` retorna [] com `day_counts` e `debug` = dia sem rodada (mostra chips próximos dias), só vai para demo quando TODAS as fontes reais falham por erro de rede/token, com aviso explícito.
@@ -40,7 +42,7 @@ python3 -m app.backtest --train 2324 2425 --test 2526 --fit-calibration --report
 
 Mede Brier/LogLoss vs. mercado, tabela de calibração, teste de alfa, ROI das estratégias (flat e Kelly) e CLV contra a odd de fechamento. Cache em `data_cache/`.
 
-## Fontes de dados (v2.4.3 só principais)
+## Fontes de dados (v2.4.4 só principais + segredos pro)
 
 | Provedor | Custo | Cobertura | Odds | Papel |
 |---|---|---|---|---|
@@ -56,13 +58,15 @@ Mede Brier/LogLoss vs. mercado, tabela de calibração, teste de alfa, ROI das e
 
 **v2.4.3:** removidas ligas secundárias (MLS, Liga MX, Argentine, Nations, amistosos, Championship) — experiência de análise ruim, modelo não calibrado para elas. App foca só nas principais onde tem xG, calibração e histórico sólido.
 
+**v2.4.4 segredos pro (Render free):** (1) fadiga usa só `days_ago` já existente, (2) regressão xG usa `gf-xgf` já baixado, (3) correlação é pura lógica Python. Zero chamada extra, zero dep nova, mesma RAM 512MB.
+
 Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs.
 
 Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs. Sem uso pago, todas as fontes do dia a cabo.
 
 ## Metodologia (resumo)
 
-Modelo v2: dois horizontes de força por time (estrutural meia-vida ~58d + forma recente 25%), força sobre **xG do Understat** nas ligas cobertas, **modelo conjunto por liga** (regressão de Poisson ridge ajustada por adversário, sem viés de calendário), matriz Dixon-Coles (ρ = −0,09), **calibração isotônica** por mercado/modo treinada em temporadas passadas, mistura com o consenso de mercado (25%, devig proporcional, só preços reais), Kelly fracionado com desconto de incerteza. Na temporada 25/26 real: **81,1% de acerto por perna** (prometido 83,3%) na dinâmica "linha mais segura"; detalhes e métricas honestas em `backtest_report.md`.
+Modelo v2.4.4: dois horizontes de força (58d + 11d, peso forma 25%), xG Understat, **modelo conjunto por liga** (Poisson ridge ajustado por adversário), Dixon-Coles ρ=-0,09, **calibração isotônica**, blend mercado 25%, Kelly com incerteza + **3 segredos pro Render free**: (1) **fadiga avançada** (jogos 7/14d, rest curto, -5 a -8% λ), (2) **regressão xG vs gols** (overperform +3.5 gols vs xG = -6% λ, segredo Pinnacle), (3) **correlação de múltipla** (2 overs mesma liga -8%, 3+ -15% prob combinada). Na 25/26 real: **81,1% acerto por perna**; detalhes em `backtest_report.md`.
 
 ## Estrutura
 
