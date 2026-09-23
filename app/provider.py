@@ -5,7 +5,13 @@ Provedores suportados:
 - football-data.org (v4): tier gratuito cobre Brasileirão Série A, Premier League,
   La Liga, Serie A, Bundesliga, Ligue 1, Champions League e mais. Limite 10 req/min.
 - API-Football (api-sports.io v3): tier gratuito 100 req/dia; cobre odds reais.
+- OpenLigaDB: grátis, sem chave, sem cota — fallback automático (Bundesliga + outras)
+- ESPN (não-oficial): grátis, sem chave, cobre Brasileirão, Libertadores, Champions
 - demo: dados simulados realistas para testar a plataforma sem chave.
+
+Fallback automático (v2.4):
+  fd --(falha/vazio)--> openliga --(falha)--> espn --(falha)--> demo
+  Garante que o painel nunca fique vazio por instabilidade de uma API só.
 
 Tudo é cacheado em SQLite para economizar requisições.
 """
@@ -24,6 +30,8 @@ from . import db
 FD_BASE = "https://api.football-data.org/v4"
 AF_BASE = "https://v3.football.football-api-sports.io"
 AF_BASE_ALT = "https://v3.football.api-sports.io"
+OPENLIGA_BASE = "https://www.openligadb.de/api"
+ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 
 # football-data.org: competições do tier gratuito que interessam
 FD_COMPETITIONS = {
@@ -52,6 +60,63 @@ AF_LEAGUES = {
     78: "Bundesliga",
     61: "Ligue 1",
 }
+
+# OpenLigaDB: shortcuts -> nome interno (mesmo nome usado no resto do app)
+# Fonte: https://www.openligadb.de/api/getavailableleagues
+OPENLIGA_LEAGUES = {
+    "bl1": "Bundesliga",
+    "bl2": "Championship (Inglaterra)",  # 2. Bundesliga - mapeado como segunda divisão para não perder jogos
+    "bl3": "Bundesliga",  # 3. Liga - fallback
+    "dfb": "Bundesliga",
+    "cl": "Champions League",
+    "el": "Champions League",  # Europa League -> cai no mesmo bucket
+    "em": "Champions League",
+    "wm": "Champions League",
+}
+
+# OpenLigaDB shortcuts que vamos consultar por dia (custo zero, sem cota)
+OPENLIGA_SHORTCUTS = ["bl1", "bl2", "cl"]
+
+# ESPN: código da liga na ESPN -> nome interno
+ESPN_LEAGUES = {
+    "bra.1": "Brasileirão Série A",
+    "eng.1": "Premier League",
+    "esp.1": "La Liga",
+    "ita.1": "Serie A (Itália)",
+    "ger.1": "Bundesliga",
+    "fra.1": "Ligue 1",
+    "por.1": "Primeira Liga (Portugal)",
+    "ned.1": "Eredivisie",
+    "eng.2": "Championship (Inglaterra)",
+    "usa.1": "MLS (EUA)",  # continua na Data FIFA
+    "mex.1": "Liga MX (México)",  # continua na Data FIFA
+    "arg.1": "Liga Profesional (Argentina)",  # continua na Data FIFA
+    "uefa.champions": "Champions League",
+    "conmebol.libertadores": "Libertadores",
+    "conmebol.sudamericana": "Libertadores",
+    "bra.copa": "Copa do Brasil",
+    "uefa.nations": "Liga das Nações",  # Data FIFA
+    "fifa.friendly": "Amistosos Seleções",  # Brasil x Austrália etc
+}
+
+ESPN_CODES = ["bra.1", "eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "por.1", "ned.1", "eng.2", "uefa.champions", "conmebol.libertadores"]
+# Códigos que continuam na Data FIFA (21/09 a 06/10) - melhores alternativas
+ESPN_FIFA_CODES = ["bra.1", "usa.1", "mex.1", "arg.1", "eng.2", "uefa.nations", "fifa.friendly"]
+# Todos os códigos para modo normal + FIFA
+ESPN_ALL_CODES = list(dict.fromkeys(ESPN_CODES + ESPN_FIFA_CODES))
+
+# Janela da Super Data FIFA 2026: 21/09 a 06/10 (16 dias, 4 jogos seleções)
+# Fonte: FIFA International Match Calendar 2026
+FIFA_2026_START = date(2026, 9, 21)
+FIFA_2026_END = date(2026, 10, 6)
+
+def is_fifa_window(day: str | date) -> bool:
+    """Verifica se o dia está dentro da Super Data FIFA 2026."""
+    try:
+        d = day if isinstance(day, date) else date.fromisoformat(day)
+    except (TypeError, ValueError):
+        return False
+    return FIFA_2026_START <= d <= FIFA_2026_END
 
 
 class ProviderError(Exception):
@@ -482,6 +547,406 @@ async def af_odds(key: str, fixture_id: int):
                     odds[mk] = max(odds.get(mk, 0), odd)  # melhor odd entre casas
     db.cache_set(ck, odds, 2 * 3600)
     return odds
+
+
+# -------------------------------------------------------------- fallback: OpenLigaDB (sem chave, sem cota)
+# Docs: https://www.openligadb.de/api/getmatchdata/{leagueShortcut}/{leagueSeason}
+# Exemplo: /api/getmatchdata/bl1/2025  -> todos os jogos da Bundesliga 2025/26
+# Cada jogo tem matchDateTimeUTC, team1/team2, matchID etc.
+
+def _ol_current_season(d: dt.date) -> int:
+    # temporada europeia: 2025 = 2025/26, começa em julho
+    return d.year if d.month >= 7 else d.year - 1
+
+async def _ol_get(client: httpx.AsyncClient, path: str):
+    try:
+        r = await client.get(f"{OPENLIGA_BASE}{path}", timeout=20,
+                             headers={"User-Agent": "Mozilla/5.0 (FutAnalytics fallback)"})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        raise ProviderError(f"OpenLigaDB falhou: {e}")
+
+async def openliga_fixtures(day: str) -> list:
+    """Busca jogos do dia no OpenLigaDB (grátis, sem chave)."""
+    ck = f"ol:fixtures:v2:{day}"
+    cached = db.cache_get(ck)
+    if cached is not None:
+        return cached
+    try:
+        d0 = dt.date.fromisoformat(day)
+    except (TypeError, ValueError):
+        raise ProviderError(f"Data inválida: {day}")
+    seasons = [_ol_current_season(d0), _ol_current_season(d0) - 1]
+    out = []
+    success = False
+    errors = 0
+    async with httpx.AsyncClient() as client:
+        for season in seasons:
+            for shortcut in OPENLIGA_SHORTCUTS:
+                try:
+                    data = await _ol_get(client, f"/getmatchdata/{shortcut}/{season}")
+                    success = True
+                except ProviderError:
+                    errors += 1
+                    continue
+                if not isinstance(data, list):
+                    continue
+                for m in data:
+                    try:
+                        utc_str = m.get("matchDateTimeUTC") or m.get("matchDateTime")
+                        if not utc_str:
+                            continue
+                        if not utc_str.endswith("Z") and "T" in utc_str:
+                            utc_iso = utc_str + "Z" if "+" not in utc_str else utc_str
+                        else:
+                            utc_iso = utc_str
+                        try:
+                            local_d = _local_day(utc_iso)
+                        except Exception:
+                            local_d = utc_iso[:10]
+                        if local_d != day:
+                            continue
+                        t1 = m.get("team1") or {}
+                        t2 = m.get("team2") or {}
+                        t1_name = t1.get("teamName") or t1.get("shortName") or "Time A"
+                        t2_name = t2.get("teamName") or t2.get("shortName") or "Time B"
+                        league_name = OPENLIGA_LEAGUES.get(shortcut, f"Liga {shortcut}")
+                        mid = m.get("matchID") or f"{shortcut}-{t1.get('teamId')}-{t2.get('teamId')}"
+                        out.append({
+                            "id": f"ol-{mid}",
+                            "provider": "openliga",
+                            "league": league_name,
+                            "kickoff_utc": utc_iso,
+                            "status": "SCHEDULED" if m.get("matchIsFinished") is False else "FINISHED" if m.get("matchIsFinished") else "SCHEDULED",
+                            "home": {"id": t1.get("teamId", 0), "name": t1_name},
+                            "away": {"id": t2.get("teamId", 0), "name": t2_name},
+                            "_ol_shortcut": shortcut,
+                            "_ol_season": season,
+                        })
+                    except (KeyError, TypeError, ValueError):
+                        continue
+            if out:
+                break  # já achou jogos, não precisa varrer temporada anterior
+    if not success and errors > 0:
+        raise ProviderError(f"OpenLigaDB fora do ar (tentou {errors} ligas)")
+    ttl = 3600 if day >= str(date.today()) else 6 * 3600
+    db.cache_set(ck, out, ttl)
+    return out
+
+async def openliga_team_recent(team_id: int, team_name: str) -> list:
+    """Histórico recente via OpenLigaDB: varre temporadas atual e anterior."""
+    ck = f"ol:team:{team_id}"
+    cached = db.cache_get(ck)
+    if cached is not None:
+        return cached
+    today = date.today()
+    seasons = [_ol_current_season(today), _ol_current_season(today) - 1]
+    games = []
+    async with httpx.AsyncClient() as client:
+        for season in seasons:
+            for shortcut in OPENLIGA_SHORTCUTS:
+                try:
+                    data = await _ol_get(client, f"/getmatchdata/{shortcut}/{season}")
+                except ProviderError:
+                    continue
+                if not isinstance(data, list):
+                    continue
+                for m in data:
+                    try:
+                        if not m.get("matchIsFinished"):
+                            continue
+                        t1 = m.get("team1") or {}
+                        t2 = m.get("team2") or {}
+                        if t1.get("teamId") != team_id and t2.get("teamId") != team_id:
+                            continue
+                        # resultado final
+                        res = None
+                        for r in (m.get("matchResults") or []):
+                            if r.get("resultTypeID") == 2:  # Endergebnis
+                                res = r
+                                break
+                        if not res:
+                            # pega último resultado disponível
+                            results = m.get("matchResults") or []
+                            if results:
+                                res = results[-1]
+                        if not res:
+                            continue
+                        hg = res.get("pointsTeam1")
+                        ag = res.get("pointsTeam2")
+                        if hg is None or ag is None:
+                            continue
+                        dt_str = m.get("matchDateTimeUTC") or m.get("matchDateTime") or ""
+                        try:
+                            played = dt.datetime.fromisoformat(dt_str.replace("Z", "+00:00")).date()
+                        except Exception:
+                            continue
+                        days_ago = (today - played).days
+                        if days_ago < 0 or days_ago > 240:
+                            continue
+                        is_home = t1.get("teamId") == team_id
+                        gf, ga = (hg, ag) if is_home else (ag, hg)
+                        games.append([days_ago, is_home, gf, ga])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+    # ordena por mais recente e limita
+    games = sorted(games, key=lambda x: x[0])[:20]
+    db.cache_set(ck, games, 12 * 3600)
+    return games
+
+
+# -------------------------------------------------------------- fallback: ESPN (sem chave, cobre Brasileirão)
+async def _espn_get(client: httpx.AsyncClient, path: str, params=None):
+    try:
+        r = await client.get(f"{ESPN_BASE}{path}", params=params or {}, timeout=20,
+                             headers={"User-Agent": "Mozilla/5.0 (FutAnalytics fallback)"})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        raise ProviderError(f"ESPN falhou: {e}")
+
+async def espn_fixtures(day: str) -> list:
+    """Busca jogos do dia na ESPN (grátis, sem chave). Cobre Brasileirão, PL, La Liga etc.
+    Durante Data FIFA, foca nas melhores ligas que continuam: MLS, Liga MX, Argentina, Championship + 2 jogos Brasileirão atrasados + Liga das Nações.
+    """
+    ck = f"espn:fixtures:v2:{day}"
+    cached = db.cache_get(ck)
+    if cached is not None:
+        return cached
+    try:
+        d0 = dt.date.fromisoformat(day)
+    except (TypeError, ValueError):
+        raise ProviderError(f"Data inválida: {day}")
+    espn_date = d0.strftime("%Y%m%d")
+    out = []
+    success = False
+    errors = 0
+    # Durante Data FIFA, usa só as ligas que continuam (melhores alternativas)
+    codes = ESPN_FIFA_CODES if is_fifa_window(d0) else ESPN_ALL_CODES
+    async with httpx.AsyncClient() as client:
+        for code in codes:
+            try:
+                data = await _espn_get(client, f"/{code}/scoreboard", {"dates": espn_date})
+                success = True
+            except ProviderError:
+                errors += 1
+                continue
+            events = data.get("events") or []
+            for ev in events:
+                try:
+                    comps = ev.get("competitions") or []
+                    if not comps:
+                        continue
+                    comp = comps[0]
+                    competitors = comp.get("competitors") or []
+                    if len(competitors) < 2:
+                        continue
+                    home_c = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+                    away_c = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1] if len(competitors) > 1 else competitors[0])
+                    home_team = home_c.get("team") or {}
+                    away_team = away_c.get("team") or {}
+                    home_name = home_team.get("displayName") or home_team.get("name") or "Casa"
+                    away_name = away_team.get("displayName") or away_team.get("name") or "Fora"
+                    utc_iso = ev.get("date") or comp.get("date") or ""
+                    if not utc_iso:
+                        continue
+                    try:
+                        local_d = _local_day(utc_iso)
+                    except Exception:
+                        local_d = utc_iso[:10]
+                    if local_d != day:
+                        continue
+                    league_name = ESPN_LEAGUES.get(code, code)
+                    out.append({
+                        "id": f"espn-{ev.get('id')}",
+                        "provider": "espn",
+                        "league": league_name,
+                        "kickoff_utc": utc_iso,
+                        "status": comp.get("status", {}).get("type", {}).get("name", "SCHEDULED"),
+                        "home": {"id": int(home_team.get("id", 0) or 0), "name": home_name},
+                        "away": {"id": int(away_team.get("id", 0) or 0), "name": away_name},
+                        "_espn_league": code,
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+    if not success and errors > 0:
+        raise ProviderError(f"ESPN fora do ar (tentou {errors} ligas)")
+    ttl = 3600 if day >= str(date.today()) else 6 * 3600
+    db.cache_set(ck, out, ttl)
+    return out
+
+async def espn_team_recent(team_id: int, team_name: str) -> list:
+    """Histórico recente via ESPN: tenta buscar schedule do time nas ligas principais."""
+    ck = f"espn:team:{team_id}"
+    cached = db.cache_get(ck)
+    if cached is not None:
+        return cached
+    today = date.today()
+    games = []
+    # Para simplificar, varre as ligas principais buscando o time por nome
+    # Se não achar, retorna vazio e o modelo usa só médias da liga + xG (se houver)
+    async with httpx.AsyncClient() as client:
+        for code in ESPN_CODES[:6]:  # só as principais para não estourar
+            try:
+                # endpoint de schedule: /{league}/teams/{teamId}/schedule
+                # team_id da ESPN é diferente, então tentamos buscar por nome via scoreboard histórico
+                # fallback: busca últimos 30 dias de scoreboard e filtra por nome
+                for delta in range(0, 60, 7):
+                    d = today - timedelta(days=delta)
+                    espn_date = d.strftime("%Y%m%d")
+                    try:
+                        data = await _espn_get(client, f"/{code}/scoreboard", {"dates": espn_date})
+                    except ProviderError:
+                        continue
+                    for ev in data.get("events") or []:
+                        try:
+                            comps = ev.get("competitions") or []
+                            if not comps:
+                                continue
+                            comp = comps[0]
+                            # só jogos finalizados
+                            if comp.get("status", {}).get("type", {}).get("completed") is not True:
+                                continue
+                            competitors = comp.get("competitors") or []
+                            # verifica se nosso time está no jogo (por nome aproximado)
+                            found = False
+                            is_home = False
+                            gf = ga = None
+                            for c in competitors:
+                                t = c.get("team") or {}
+                                name = (t.get("displayName") or "").lower()
+                                if team_name.lower() in name or name in team_name.lower():
+                                    found = True
+                                    is_home = c.get("homeAway") == "home"
+                                    # score
+                                    try:
+                                        gf = int(c.get("score", 0))
+                                    except (TypeError, ValueError):
+                                        gf = None
+                            if not found:
+                                continue
+                            # pega placar adversário
+                            for c in competitors:
+                                if (c.get("homeAway") == "home") != is_home:
+                                    try:
+                                        ga = int(c.get("score", 0))
+                                    except (TypeError, ValueError):
+                                        ga = None
+                            if gf is None or ga is None:
+                                continue
+                            played = dt.datetime.fromisoformat((ev.get("date") or "").replace("Z", "+00:00")).date()
+                            days_ago = (today - played).days
+                            if days_ago < 0 or days_ago > 240:
+                                continue
+                            games.append([days_ago, is_home, gf, ga])
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                    if len(games) >= 15:
+                        break
+            except Exception:
+                continue
+            if len(games) >= 15:
+                break
+    games = sorted(games, key=lambda x: x[0])[:20]
+    db.cache_set(ck, games, 12 * 3600)
+    return games
+
+
+# Função de fallback automático: tenta fd -> openliga -> espn -> (vazio, não demo)
+# v2.4.1: corrige bug que fazia cair no demo em dia sem rodada genuíno.
+# Demo só é usado quando o usuário escolhe demo explicitamente ou quando TODAS
+# as fontes reais falham por erro de rede/token. Dia sem jogo mostra "Nenhum jogo"
+# com chips dos próximos dias, não jogos fake tipo "Arsenal x Fortaleza".
+async def fixtures_with_fallback(primary: str, day: str, fd_token: str = "", af_key: str = "") -> tuple[list, str, dict]:
+    """
+    Retorna (fixtures, provider_usado, info_fallback)
+    info_fallback: {tried: [...], used: str, fallback: bool, reason: str}
+    """
+    tried = []
+    last_error = None
+
+    # 1) primário: fd
+    if primary == "fd":
+        if not fd_token:
+            # sem token, não tenta fd — vai direto para fallbacks gratuitos
+            tried.append("fd: no-token")
+        else:
+            tried.append("fd")
+            try:
+                fx = await fd_fixtures(fd_token, day)
+                # fd_fixtures sempre retorna lista (pode ser vazia = dia sem rodada)
+                # Verifica se é falha impossível (0 jogos em 9 dias) via debug
+                if not fx:
+                    dbg = fd_day_debug(day)
+                    counts = fd_day_counts(day)
+                    api_matches = dbg.get("api_matches", -1)
+                    monitored = dbg.get("monitored_matches", -1)
+                    # 0 absoluto numa janela de 9 dias com ~10 ligas = falha, não calendário
+                    if api_matches == 0 or (api_matches == -1 and not counts):
+                        last_error = f"fd retornou 0 jogos na janela (api_matches=0) — falha"
+                        # continua para fallback
+                    else:
+                        # dia sem rodada genuíno: retorna vazio, sem fallback para demo
+                        return fx, "fd", {"tried": tried, "used": "fd", "fallback": False, "reason": "dia sem rodada"}
+                else:
+                    return fx, "fd", {"tried": tried, "used": "fd", "fallback": False}
+            except ProviderError as e:
+                last_error = str(e)
+                # continua para fallback
+
+    # 1b) primário: af
+    elif primary == "af":
+        if not af_key:
+            tried.append("af: no-key")
+        else:
+            tried.append("af")
+            try:
+                fx = await af_fixtures(af_key, day)
+                if fx:
+                    return fx, "af", {"tried": tried, "used": "af", "fallback": False}
+                else:
+                    # af retornou vazio: pode ser dia sem rodada, retorna vazio
+                    return fx, "af", {"tried": tried, "used": "af", "fallback": False, "reason": "dia sem rodada"}
+            except ProviderError as e:
+                last_error = str(e)
+
+    elif primary == "demo":
+        tried.append("demo")
+        return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": False}
+
+    # 2) fallback OpenLigaDB (sem chave, sem cota)
+    tried.append("openliga")
+    try:
+        fx = await openliga_fixtures(day)
+        if fx:
+            return fx, "openliga", {"tried": tried, "used": "openliga", "fallback": True, "reason": last_error or "fd vazio, usando openliga"}
+        # se openliga retornou vazio genuíno, tenta ESPN
+    except ProviderError as e:
+        last_error = str(e)
+
+    # 3) fallback ESPN (sem chave, cobre Brasileirão)
+    tried.append("espn")
+    try:
+        fx = await espn_fixtures(day)
+        if fx:
+            return fx, "espn", {"tried": tried, "used": "espn", "fallback": True, "reason": last_error or "fd/openliga vazios, usando espn"}
+    except ProviderError as e:
+        last_error = str(e)
+
+    # 4) Se chegou aqui, todas as fontes reais falharam por erro OU retornaram vazio genuíno
+    # Se foi erro, último recurso é demo (para nunca quebrar). Se foi vazio genuíno, retorna vazio.
+    # Distingue pelos tried: se tentamos fd e ele tinha day_counts ou debug com jogos, é vazio genuíno.
+    if primary == "fd" and fd_token:
+        dbg = fd_day_debug(day)
+        counts = fd_day_counts(day)
+        if dbg.get("api_matches", 0) > 0 or counts:
+            # dia sem rodada genuíno nas ligas monitoradas
+            return [], "fd", {"tried": tried, "used": "fd", "fallback": False, "reason": "dia sem rodada, sem fallback demo"}
+
+    # Todas falharam por erro de rede/token: último recurso demo (antes mostrava fake sem aviso, agora com aviso claro)
+    tried.append("demo")
+    return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": True, "reason": last_error or "todas as fontes reais falharam"}
 
 
 # ---------------------------------------------------------------- demo

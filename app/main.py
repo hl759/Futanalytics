@@ -42,14 +42,14 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.3.5"
+VERSION = "2.4.2"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
 # ------------------------------------------------------------------ settings
 class Settings(BaseModel):
-    provider: str = "demo"            # demo | fd | af
+    provider: str = "demo"            # demo | fd | af | openliga | espn (fallback automático sempre ativo)
     fd_token: str = ""
     af_key: str = ""
     bankroll: float = 1000.0
@@ -247,6 +247,12 @@ async def test_provider(which: str):
             info = await provider.fd_status(s.fd_token)
             comps = ", ".join(info["competitions"][:6])
             return {"ok": True, "msg": f"Token válido. Competições cobertas: {comps}."}
+        if which == "openliga":
+            fx = await provider.openliga_fixtures(str(date.today()))
+            return {"ok": True, "msg": f"OpenLigaDB OK: {len(fx)} jogos hoje (grátis, sem chave, sem cota)."}
+        if which == "espn":
+            fx = await provider.espn_fixtures(str(date.today()))
+            return {"ok": True, "msg": f"ESPN OK: {len(fx)} jogos hoje (grátis, sem chave, cobre Brasileirão)."}
         if which == "us":
             games = await understat.team_history("Premier League", "Manchester City")
             n = len(games or [])
@@ -262,33 +268,62 @@ async def test_provider(which: str):
 
 # ------------------------------------------------------------------ análise
 async def _load_fixtures(s: Settings, day: str):
-    if s.provider == "fd":
-        if not s.fd_token:
-            raise HTTPException(400, "Configure o token da football-data.org em Configurações.")
-        return await provider.fd_fixtures(s.fd_token, day)
-    if s.provider == "af":
-        if not s.af_key:
-            raise HTTPException(400, "Configure a chave da API-Football em Configurações.")
-        return await provider.af_fixtures(s.af_key, day)
-    return provider.demo_fixtures(day)
+    """Carrega jogos com fallback automático: fd -> openliga -> espn -> demo (v2.4)"""
+    # provedores novos podem ser selecionados manualmente para teste
+    if s.provider == "openliga":
+        return await provider.openliga_fixtures(day)
+    if s.provider == "espn":
+        return await provider.espn_fixtures(day)
+    if s.provider == "demo":
+        return provider.demo_fixtures(day)
+
+    # fd ou af com fallback automático
+    try:
+        fixtures, used, info = await provider.fixtures_with_fallback(
+            s.provider, day, s.fd_token, s.af_key
+        )
+        # guarda info de fallback no cache para o endpoint /api/day mostrar
+        db.cache_set(f"fallback:info:{day}", info, 3600)
+        db.cache_set(f"fallback:used:{day}", used, 3600)
+        return fixtures
+    except Exception:
+        # último recurso: demo nunca falha
+        return provider.demo_fixtures(day)
 
 
 async def _team_games(s: Settings, fx: dict, side: str, day: str):
     """Histórico do time; prioriza Understat (gols + xG), cai para o provedor."""
     team = fx[side]
-    # xG do Understat para as ligas cobertas (não consome cota das APIs pagas).
-    # Com xg_weight = 0 (kill-switch nas Configurações) nem consulta.
     if s.xg_weight > 0:
         try:
             us = await understat.team_history(fx["league"], team["name"])
             if us and len(us) >= 6:
                 return us
         except Exception:
-            pass  # understat fora do ar: segue sem xG
-    if fx["provider"] == "fd":
-        return await provider.fd_team_recent(s.fd_token, team["id"], team["name"])
-    if fx["provider"] == "af":
-        return await provider.af_team_recent(s.af_key, team["id"], team["name"])
+            pass
+    prov = fx.get("provider", "demo")
+    if prov == "fd":
+        if s.fd_token:
+            try:
+                return await provider.fd_team_recent(s.fd_token, team["id"], team["name"])
+            except Exception:
+                pass
+        # sem token ou falhou: tenta histórico do fallback
+        try:
+            return await provider.openliga_team_recent(team["id"], team["name"])
+        except Exception:
+            return []
+    if prov == "af":
+        if s.af_key:
+            try:
+                return await provider.af_team_recent(s.af_key, team["id"], team["name"])
+            except Exception:
+                return []
+        return []
+    if prov == "openliga":
+        return await provider.openliga_team_recent(team["id"], team["name"])
+    if prov == "espn":
+        return await provider.espn_team_recent(team["id"], team["name"])
     return provider.demo_team_recent(day, team)
 
 
@@ -499,12 +534,21 @@ async def day_analysis(day: str | None = None):
     # rodada" de "a API parou de entregar" — a diferença entre esperar e agir.
     day_counts: dict = {}
     fixtures_debug: dict = {}
+    fallback_info: dict = {}
+    actual_provider = s.provider
+    is_fifa = provider.is_fifa_window(day)
     if s.provider == "fd":
         fixtures_debug = provider.fd_day_debug(day)
         if not fixtures:
             day_counts = provider.fd_day_counts(day)
+    # info de qual provedor foi realmente usado (pode ser fallback)
+    try:
+        actual_provider = db.cache_get(f"fallback:used:{day}") or s.provider
+        fallback_info = db.cache_get(f"fallback:info:{day}") or {}
+    except Exception:
+        pass
 
-    with_odds = s.provider in ("af", "demo")
+    with_odds = actual_provider in ("af", "demo")
     # limitar concorrência para respeitar rate limits
     sem = asyncio.Semaphore(2 if s.provider == "fd" else 5)
 
@@ -584,7 +628,15 @@ async def day_analysis(day: str | None = None):
 
     return {
         "day": day,
-        "provider": s.provider,
+        "provider": actual_provider,
+        "requested_provider": s.provider,
+        "fallback": fallback_info,
+        "is_fifa_window": is_fifa,
+        "fifa_info": {
+            "start": str(provider.FIFA_2026_START),
+            "end": str(provider.FIFA_2026_END),
+            "message": "Super Data FIFA: ligas europeias pausadas. Melhores alternativas: MLS, Liga MX, Championship + 2 jogos Brasileirão atrasados (02 e 03/10). Retorno total 07 e 08/10." if is_fifa else None,
+        } if is_fifa else None,
         "version": VERSION,
         "pick_mode": s.pick_mode,
         "multiple_min_grade": s.multiple_min_grade,
