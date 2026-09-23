@@ -572,9 +572,6 @@ async function loadDay(){
     $('#provTag').textContent+=' · odds reais indisponíveis hoje (odd justa do modelo)';
   }
     let html='';
-    if(DAY.is_fifa_window){
-      html+=`<div class="card" style="border-color:var(--amber);background:#2d2413"><span class="pill amber">Data FIFA</span> <b>Super Data FIFA: 21/09 a 06/10</b> — ligas europeias pausadas. Brasileirão também pausado (só 2 jogos atrasados 02/10 São Paulo x Santos e 03/10 Atlético-MG x Bragantino). Melhores alternativas ativas: <b>MLS (EUA), Liga MX (México), Championship (Inglaterra)</b>. Retorno total das principais ligas em 07 e 08/10. <span class="small">Fonte: FIFA International Match Calendar 2026</span></div>`;
-    }
     if(DAY.fallback&&DAY.fallback.fallback){
       if(DAY.provider==='demo'){
         html+=`<div class="warn">⚠️ <b>Todas as fontes reais falharam</b> (tentou: ${(DAY.fallback.tried||[]).join(' → ')}). O app usou <b>dados de demonstração</b> para não quebrar.<br><span class="small">Causa: ${DAY.fallback.reason||'sem detalhes'}.<br>→ Teste em Configurações: "Testar football-data", "Testar OpenLigaDB", "Testar ESPN". Se o token expirou, gere um novo em football-data.org/client/register e salve.</span></div>`;

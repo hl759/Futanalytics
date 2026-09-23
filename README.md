@@ -1,6 +1,6 @@
-# FutAnalytics v2.4.2 "Modo Data FIFA"
+# FutAnalytics v2.4.3 "Só principais"
 
-> **v2.4.2 (23/set/2026) — "Modo Data FIFA"**: Durante a Super Data FIFA 21/09 a 06/10/2026 (janela estendida de 16 dias, 4 jogos seleções, sem rodada em outubro), ligas europeias e Brasileirão pausam (só 2 jogos atrasados da 21ª rodada: 02/10 São Paulo x Santos e 03/10 Atlético-MG x Bragantino, retorno total 07 e 08/10). App detecta automaticamente a janela (`is_fifa_window`) e foca ESPN nas **melhores ligas que continuam**: **MLS (EUA), Liga MX (México), Liga Profesional (Argentina), Championship (Inglaterra)** + Liga das Nações e amistosos seleções. Fora da janela volta ao carro-chefe (Brasileirão A, PL, La Liga, Serie A, Bundesliga, Ligue 1, Champions). Banner dedicado no frontend. Sem tocar no motor (model.py/joint.py/calibration.py intactos), sem nova dependência, seguro para Render free.
+> **v2.4.3 (23/set/2026) — "remove secundárias"**: Experiência ruim analisando jogos secundários alternativos (MLS, Liga MX, Argentine, Nations, amistosos, Championship) adicionados na v2.4.2. Removidas do app: ESPN agora busca apenas **principais** (Brasileirão A, PL, La Liga, Serie A, Bundesliga, Ligue 1, Champions, Copa do Brasil, Libertadores). Sem tocar no motor/IA (model.py/joint.py/calibration.py intactos), sem nova dependência, seguro Render free. Durante Data FIFA o app mostra dia vazio com chips dos próximos dias em vez de forçar análise ruim.
 >
 > **v2.4.1 (23/set/2026) — "demo não invade dia vazio"**: corrige bug que fazia cair no demo com jogos fake tipo "Arsenal x Fortaleza" em dia genuinamente sem rodada. Agora distingue falha vs vazio: `fd` retorna [] com `day_counts` e `debug` = dia sem rodada (mostra chips próximos dias), só vai para demo quando TODAS as fontes reais falham por erro de rede/token, com aviso explícito.
 >
@@ -40,21 +40,21 @@ python3 -m app.backtest --train 2324 2425 --test 2526 --fit-calibration --report
 
 Mede Brier/LogLoss vs. mercado, tabela de calibração, teste de alfa, ROI das estratégias (flat e Kelly) e CLV contra a odd de fechamento. Cache em `data_cache/`.
 
-## Fontes de dados (v2.4.2 com Modo Data FIFA)
+## Fontes de dados (v2.4.3 só principais)
 
 | Provedor | Custo | Cobertura | Odds | Papel |
 |---|---|---|---|---|
 | Demonstração | nenhum | dados simulados | simuladas | Último recurso (sempre funciona) |
-| football-data.org | grátis (token) | Brasileirão A, Champions, top 5 Europa, Portugal, Holanda, Championship | não | **Principal** |
-| **OpenLigaDB** | grátis, **sem chave** | Bundesliga, 2. Bundesliga, Champions | não | **Fallback 1** automático, sem cota |
-| **ESPN** | grátis, **sem chave** | Brasileirão A/B, Copa do Brasil, Libertadores, PL, La Liga, Serie A, Bundesliga, **MLS, Liga MX, Argentine, Nations League, amistosos** | não | **Fallback 2** automático, cobre Brasil + **Data FIFA** |
+| football-data.org | grátis (token) | Brasileirão A, Champions, top 5 Europa, Portugal, Holanda | não | **Principal** |
+| **OpenLigaDB** | grátis, **sem chave** | Bundesliga, Champions | não | **Fallback 1** automático, sem cota |
+| **ESPN** | grátis, **sem chave** | Brasileirão A, Copa do Brasil, Libertadores, PL, La Liga, Serie A, Bundesliga, Ligue 1 | não | **Fallback 2** automático, só principais |
 | **football-data.co.uk** | grátis, sem chave | ~22 ligas europeias (próximas rodadas) | **sim: B365 + Pinnacle** | Odds reais |
 | API-Football (api-sports.io) | pago p/ temporada atual | Série A/B, Copa do Brasil, Libertadores + Europa | sim | Alternativa paga |
 | Understat | grátis, sem chave | xG histórico: Premier, La Liga, Bundesliga, Serie A, Ligue 1 | — | xG |
 
 **Como funciona o fallback (v2.4):** `fd --falha/vazio--> openliga --falha--> espn --falha--> demo`. Se o principal falhar, o painel mostra `fallback automático: pediu fd → usou openliga`. Você nunca fica sem jogos.
 
-**Modo Data FIFA (v2.4.2):** 21/09 a 06/10/2026 — janela estendida FIFA com 4 jogos seleções. Ligas europeias pausam, Brasileirão pausado (só 2 jogos atrasados 02 e 03/10). Durante a janela, ESPN busca `bra.1, usa.1 (MLS), mex.1 (Liga MX), arg.1 (Argentina), eng.2 (Championship), uefa.nations, fifa.friendly`. Fora da janela, busca todas as principais. Banner amarelo no painel avisa o usuário. Baseado em FIFA IMC 2026 e notícias de que MLS, Liga MX e Argentine continuam durante Data FIFA.
+**v2.4.3:** removidas ligas secundárias (MLS, Liga MX, Argentine, Nations, amistosos, Championship) — experiência de análise ruim, modelo não calibrado para elas. App foca só nas principais onde tem xG, calibração e histórico sólido.
 
 Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs.
 
