@@ -42,7 +42,7 @@ from .model import (
 app = FastAPI(title="FutAnalytics")
 db.init()
 
-VERSION = "2.4.0"
+VERSION = "2.4.2"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
@@ -536,6 +536,7 @@ async def day_analysis(day: str | None = None):
     fixtures_debug: dict = {}
     fallback_info: dict = {}
     actual_provider = s.provider
+    is_fifa = provider.is_fifa_window(day)
     if s.provider == "fd":
         fixtures_debug = provider.fd_day_debug(day)
         if not fixtures:
@@ -630,6 +631,12 @@ async def day_analysis(day: str | None = None):
         "provider": actual_provider,
         "requested_provider": s.provider,
         "fallback": fallback_info,
+        "is_fifa_window": is_fifa,
+        "fifa_info": {
+            "start": str(provider.FIFA_2026_START),
+            "end": str(provider.FIFA_2026_END),
+            "message": "Super Data FIFA: ligas europeias pausadas. Melhores alternativas: MLS, Liga MX, Championship + 2 jogos Brasileirão atrasados (02 e 03/10). Retorno total 07 e 08/10." if is_fifa else None,
+        } if is_fifa else None,
         "version": VERSION,
         "pick_mode": s.pick_mode,
         "multiple_min_grade": s.multiple_min_grade,
