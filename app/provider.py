@@ -78,7 +78,24 @@ BN_BASE = "https://api.binance.com/api/v3"          # opcional: geo-bloqueada em
 BN_MIRROR = "https://data-api.binance.vision/api/v3"  # espelho público de dados
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; SigmaDesk/0.1; +local research)"}
-TIMEOUT = 20.0
+
+# ---------------------------------------------------------------------------
+# Orçamento de tempo — restrição do RENDER FREE, não preferência estética.
+#
+# O pior caso antigo era: candles tenta deribit→coinbase→kraken (3×20s = 60s),
+# chain 20s, dvol 20s = 100s POR MOEDA, e as duas moedas eram sequenciais =
+# 200s por request. Aqui dentro as conexões falham rápido (TLS EOF em ~0,1s),
+# então media 3,5s e parecia ótimo. Num IP de datacenter onde o provedor
+# BLACK-HOLA os pacotes em vez de rejeitá-los, cada tentativa consome o timeout
+# inteiro — e o painel simplesmente não carrega.
+#
+# APIs de dados de mercado respondem em <1s quando estão saudáveis. 20s de
+# timeout não é tolerância, é latência garantida para o usuário.
+TIMEOUT = 8.0              # por chamada individual
+DEADLINE_S = 25.0          # teto GLOBAL por request; passou disso, o que
+                           # faltar vira demo com aviso
+BREAKER_FAILS = 2          # falhas consecutivas para abrir o disjuntor
+BREAKER_COOLDOWN = 180.0   # segundos pulando o provedor depois de abrir
 
 # v4 da decisão do usuário: SÓ BTC e ETH. Nada de cauda longa com ponta fina.
 CURRENCIES = ("BTC", "ETH")
@@ -108,6 +125,81 @@ class ProviderError(Exception):
 
 
 # ------------------------------------------------------------------ utilidades
+# ------------------------------------------------------------------ disjuntor
+# Sem isto, CADA carga de página depois do TTL vencer paga de novo o timeout
+# inteiro de um provedor que já sabemos estar morto. Com 3 camadas × 2 moedas,
+# são até 6 penalidades repetidas por visita — num free tier que dorme após
+# 15 min, o cold start viraria minutos.
+_breaker: dict[str, dict] = {}
+
+
+def breaker_state(host: str) -> str:
+    b = _breaker.get(host)
+    if not b or not b.get("opened_at"):
+        return "closed"
+    if time.monotonic() - b["opened_at"] > BREAKER_COOLDOWN:
+        return "half-open"          # deixa tentar uma vez
+    return "open"
+
+
+def breaker_skip(host: str) -> bool:
+    return breaker_state(host) == "open"
+
+
+def breaker_note(host: str, ok: bool, err: str = "") -> None:
+    b = _breaker.setdefault(host, {"fails": 0, "opened_at": None, "last_error": ""})
+    if ok:
+        b.update(fails=0, opened_at=None, last_error="")
+        return
+    b["fails"] += 1
+    b["last_error"] = err[:200]
+    if b["fails"] >= BREAKER_FAILS:
+        b["opened_at"] = time.monotonic()
+
+
+def _skip_reason(host: str) -> str:
+    b = _breaker.get(host, {})
+    retry = (round(BREAKER_COOLDOWN - (time.monotonic() - b.get("opened_at", 0)), 1)
+             if b.get("opened_at") else 0)
+    return (f"pulado: disjuntor aberto após {b.get('fails', 0)} falhas "
+            f"(última: {str(b.get('last_error', '?'))[:70]}; "
+            f"nova tentativa em {max(retry, 0):.0f}s)")
+
+
+def breaker_report() -> dict:
+    """Estado dos disjuntores para o diagnóstico do painel."""
+    out = {}
+    for host, b in _breaker.items():
+        st = breaker_state(host)
+        out[host] = {
+            "state": st, "fails": b["fails"], "last_error": b["last_error"],
+            "retry_in_s": (round(BREAKER_COOLDOWN - (time.monotonic() - b["opened_at"]), 1)
+                           if st == "open" and b.get("opened_at") else 0),
+        }
+    return out
+
+
+async def _guarded(coro, host: str, deadline: float | None):
+    """Roda uma chamada respeitando timeout individual E deadline global.
+
+    Devolve (resultado, erro). Nunca levanta — o painel precisa distinguir
+    FALHA de VAZIO (lição da v2.4.1 do FutAnalytics).
+    """
+    budget = TIMEOUT
+    if deadline is not None:
+        budget = min(budget, deadline - time.monotonic())
+    if budget <= 0.3:
+        return None, f"deadline do request esgotado antes de tentar {host}"
+    try:
+        return await asyncio.wait_for(coro, timeout=budget), None
+    except asyncio.TimeoutError:
+        return None, f"{host} não respondeu em {budget:.1f}s (timeout)"
+    except ProviderError as e:
+        return None, str(e)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
 async def _pace(host: str) -> None:
     """Ritma chamadas ao mesmo host (herdeiro de `_fd_pace` do FutAnalytics)."""
     interval = MIN_INTERVAL.get(host, 0.3)
@@ -733,13 +825,17 @@ class _Lcg:
 
 # ------------------------------------------------------------------ fallback
 async def candles_with_fallback(ccy: str = "BTC", days: int = 400,
-                                force: str | None = None
+                                force: str | None = None,
+                                deadline: float | None = None
                                 ) -> tuple[list[dict], str, dict]:
     """OHLCV com cadeia de fallback (herdeiro de `fixtures_with_fallback`).
 
     `deribit -> coinbase -> kraken -> demo`. Devolve (velas, fonte, diagnóstico).
     Nunca levanta: o painel precisa distinguir FALHA de VAZIO, como a v2.4.1
     do FutAnalytics aprendeu do jeito difícil.
+
+    Binance fica FORA da cadeia: geo-bloqueada no IP do Render free (EUA),
+    confirmado por teste ("restricted location").
     """
     debug: dict = {"asked": [], "errors": {}}
     order = ["deribit", "coinbase", "kraken"]
@@ -747,22 +843,27 @@ async def candles_with_fallback(ccy: str = "BTC", days: int = 400,
         order = [force] + [p for p in order if p != force]
     for src in order:
         debug["asked"].append(src)
-        try:
-            if src == "deribit":
-                data = await dr_ohlcv(ccy, "1D", days)
-            elif src == "coinbase":
-                data = await cb_candles(ccy, 86400, days)
-            else:
-                data = await kraken_ohlcv(ccy, 1440, days)
-            if data and len(data) >= 30:
-                debug["used"] = src
-                debug["n"] = len(data)
-                return data, src, debug
-            debug["errors"][src] = f"resposta curta ({len(data or [])} velas)"
-        except ProviderError as e:
-            debug["errors"][src] = str(e)
-        except Exception as e:                       # nunca derruba o painel
-            debug["errors"][src] = f"{type(e).__name__}: {e}"
+        if breaker_skip(src):
+            debug["errors"][src] = _skip_reason(src)
+            continue
+        if src == "deribit":
+            coro = dr_ohlcv(ccy, "1D", days)
+        elif src == "coinbase":
+            coro = cb_candles(ccy, 86400, days)
+        else:
+            coro = kraken_ohlcv(ccy, 1440, days)
+        data, err = await _guarded(coro, src, deadline)
+        if err:
+            debug["errors"][src] = err
+            breaker_note(src, False, err)
+            continue
+        if data and len(data) >= 30:
+            debug["used"] = src
+            debug["n"] = len(data)
+            breaker_note(src, True)
+            return data, src, debug
+        debug["errors"][src] = f"resposta curta ({len(data or [])} velas)"
+        breaker_note(src, False, debug["errors"][src])
     debug["used"] = "demo"
     data = demo_candles(ccy, days)
     debug["n"] = len(data)
@@ -770,23 +871,31 @@ async def candles_with_fallback(ccy: str = "BTC", days: int = 400,
     return data, "demo", debug
 
 
-async def chain_with_fallback(ccy: str = "BTC") -> tuple[list[dict], str, dict]:
+async def chain_with_fallback(ccy: str = "BTC",
+                              deadline: float | None = None
+                              ) -> tuple[list[dict], str, dict]:
     """Superfície de opções: Deribit é a ÚNICA fonte real gratuita de IV.
 
     Sem Deribit não existe superfície — então aqui o fallback é honesto:
     devolve demo com aviso explícito, nunca finge que é preço de mercado.
     """
     debug: dict = {"asked": ["deribit"], "errors": {}}
-    try:
-        data = await dr_option_chain(ccy)
-        debug["used"] = "deribit"
-        debug["n"] = len(data)
-        debug["n_liquid"] = sum(1 for o in data if o["liquid"])
-        return data, "deribit", debug
-    except ProviderError as e:
-        debug["errors"]["deribit"] = str(e)
-    except Exception as e:
-        debug["errors"]["deribit"] = f"{type(e).__name__}: {e}"
+    if breaker_skip("deribit"):
+        debug["errors"]["deribit"] = _skip_reason("deribit")
+    else:
+        data, err = await _guarded(dr_option_chain(ccy), "deribit", deadline)
+        if err:
+            debug["errors"]["deribit"] = err
+            breaker_note("deribit", False, err)
+        elif data:
+            debug["used"] = "deribit"
+            debug["n"] = len(data)
+            debug["n_liquid"] = sum(1 for o in data if o["liquid"])
+            breaker_note("deribit", True)
+            return data, "deribit", debug
+        else:
+            debug["errors"]["deribit"] = "resposta vazia"
+            breaker_note("deribit", False, "resposta vazia")
     debug["used"] = "demo"
     data = demo_chain(ccy)
     debug["n"] = len(data)
@@ -795,21 +904,26 @@ async def chain_with_fallback(ccy: str = "BTC") -> tuple[list[dict], str, dict]:
     return data, "demo", debug
 
 
-async def dvol_with_fallback(ccy: str = "BTC", days: int = 400
+async def dvol_with_fallback(ccy: str = "BTC", days: int = 400,
+                             deadline: float | None = None
                              ) -> tuple[list[dict], str, dict]:
     debug: dict = {"asked": ["deribit"], "errors": {}}
-    try:
-        data = await dr_dvol(ccy, 86400, days)
-        if data:
+    if breaker_skip("deribit"):
+        debug["errors"]["deribit"] = _skip_reason("deribit")
+    else:
+        data, err = await _guarded(dr_dvol(ccy, 86400, days), "deribit", deadline)
+        if err:
+            debug["errors"]["deribit"] = err
+            breaker_note("deribit", False, err)
+        elif data:
             debug["used"] = "deribit"
             debug["n"] = len(data)
             debug["first_ts"] = data[0]["ts"]
+            breaker_note("deribit", True)
             return data, "deribit", debug
-        debug["errors"]["deribit"] = "série vazia"
-    except ProviderError as e:
-        debug["errors"]["deribit"] = str(e)
-    except Exception as e:
-        debug["errors"]["deribit"] = f"{type(e).__name__}: {e}"
+        else:
+            debug["errors"]["deribit"] = "série vazia"
+            breaker_note("deribit", False, "série vazia")
     debug["used"] = "demo"
     data = demo_dvol(ccy, days)
     debug["n"] = len(data)
@@ -818,55 +932,77 @@ async def dvol_with_fallback(ccy: str = "BTC", days: int = 400
 
 # ------------------------------------------------------------------ diagnóstico
 async def status(which: str = "all", ccy: str = "BTC") -> dict:
-    """Testa provedores individualmente — alimenta /api/test-provider e o painel."""
-    out: dict = {}
-    if which in ("all", "deribit"):
+    """Testa provedores individualmente — alimenta /api/test-provider e o painel.
+
+    Inclui o estado dos disjuntores e o orçamento de tempo, porque "por que está
+    em demo?" precisa ser respondível pela tela sem ler log de servidor.
+
+    BUG PEGO PELO BENCHMARK: este era o ÚNICO caminho que chamava provedor sem
+    `_guarded` — sem timeout individual, sem deadline e sem disjuntor. E é justo
+    o endpoint que o DEPLOY.md manda abrir PRIMEIRO depois do deploy. Num
+    black-hole ele penduraria 4×20s = 80s, ou seja: a ferramenta de diagnóstico
+    era a mais lenta do app e a que menos protegia o free tier. Agora cada
+    sondagem respeita o mesmo orçamento e NÃO abre disjuntor — diagnóstico não
+    deve ter efeito colateral sobre o caminho de produção.
+    """
+    deadline = time.monotonic() + DEADLINE_S
+    out: dict = {"_budget": {"timeout_por_chamada_s": TIMEOUT,
+                             "deadline_global_s": DEADLINE_S,
+                             "disjuntor_abre_apos": BREAKER_FAILS,
+                             "disjuntor_cooldown_s": BREAKER_COOLDOWN},
+                 "_breakers": breaker_report()}
+
+    async def probe(key: str, coro, note: str | None = None) -> None:
         t0 = time.monotonic()
-        try:
+        res, err = await _guarded(coro, key, deadline)
+        if err:
+            out[key] = {"ok": False, "error": err,
+                        "ms": round((time.monotonic() - t0) * 1000)}
+            if note:
+                out[key]["note"] = note
+            return
+        info = {"ok": True, "ms": round((time.monotonic() - t0) * 1000)}
+        if isinstance(res, list) and res:
+            info["n"] = len(res)
+            if isinstance(res[0], dict) and "c" in res[0]:
+                info["last_close"] = res[-1].get("c")
+        if note:
+            info["note"] = note
+        out[key] = info
+
+    if which in ("all", "deribit"):
+        async def _t():
             async with httpx.AsyncClient() as client:
-                await dr_rpc(client, "public/get_time", {})
-            out["deribit_time"] = {"ok": True, "ms": round((time.monotonic() - t0) * 1000)}
-        except ProviderError as e:
-            out["deribit_time"] = {"ok": False, "error": str(e)}
+                return await dr_rpc(client, "public/get_time", {})
+        await probe("deribit_time", _t())
+
     if which in ("all", "chain"):
         t0 = time.monotonic()
-        try:
-            ch = await dr_option_chain(ccy)
-            ivs = [o["mark_iv"] for o in ch if o["mark_iv"] and o["liquid"]]
+        res, err = await _guarded(dr_option_chain(ccy), "chain", deadline)
+        if err:
+            out["deribit_chain"] = {"ok": False, "error": err,
+                                    "ms": round((time.monotonic() - t0) * 1000)}
+        else:
+            ivs = [o["mark_iv"] for o in res if o.get("mark_iv") and o.get("liquid")]
             out["deribit_chain"] = {
-                "ok": True, "n": len(ch), "n_liquid": sum(1 for o in ch if o["liquid"]),
+                "ok": True, "n": len(res),
+                "n_liquid": sum(1 for o in res if o.get("liquid")),
                 "iv_min": round(min(ivs), 2) if ivs else None,
                 "iv_max": round(max(ivs), 2) if ivs else None,
-                "expiries": len({o["expiry"] for o in ch}),
+                "expiries": len({o["expiry"] for o in res}),
                 "ms": round((time.monotonic() - t0) * 1000),
             }
-        except ProviderError as e:
-            out["deribit_chain"] = {"ok": False, "error": str(e)}
+
     if which in ("all", "coinbase"):
-        t0 = time.monotonic()
-        try:
-            c = await cb_candles(ccy, 86400, 60)
-            out["coinbase"] = {"ok": True, "n": len(c), "last_close": c[-1]["c"],
-                               "ms": round((time.monotonic() - t0) * 1000)}
-        except ProviderError as e:
-            out["coinbase"] = {"ok": False, "error": str(e)}
+        await probe("coinbase", cb_candles(ccy, 86400, 60))
     if which in ("all", "kraken"):
-        t0 = time.monotonic()
-        try:
-            k = await kraken_ohlcv(ccy, 1440, 60)
-            out["kraken"] = {"ok": True, "n": len(k), "last_close": k[-1]["c"],
-                             "ms": round((time.monotonic() - t0) * 1000)}
-        except ProviderError as e:
-            out["kraken"] = {"ok": False, "error": str(e)}
+        await probe("kraken", kraken_ohlcv(ccy, 1440, 60))
     if which in ("all", "binance"):
-        t0 = time.monotonic()
-        try:
-            b = await bn_klines(ccy, "1d", 60)
-            out["binance"] = {"ok": True, "n": len(b), "last_close": b[-1]["c"],
-                              "ms": round((time.monotonic() - t0) * 1000)}
-        except ProviderError as e:
-            out["binance"] = {"ok": False, "error": str(e),
-                              "note": "esperado falhar em IP de região restrita (Render = EUA)"}
+        await probe("binance", bn_klines(ccy, "1d", 60),
+                    note="esperado falhar em IP de região restrita (Render = EUA)")
+
+    out["_breakers"] = breaker_report()
+    out["_elapsed_s"] = round(time.monotonic() - (deadline - DEADLINE_S), 2)
     return out
 
 

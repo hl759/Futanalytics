@@ -18,7 +18,8 @@ sigmadesk/
   app/            (main.py, provider.py, volread.py, db.py,
                    calibration.py, fixtures_real.json)
   static/         (index.html)
-  tools/          (validate_etapa0.py, smoke_api.py, capture_fixtures.py)
+  tools/          (validate_etapa0.py, smoke_api.py, bench_render_free.py,
+                   capture_fixtures.py)
   requirements.txt
   render.yaml
   README.md
@@ -34,16 +35,19 @@ seu computador. Subir não custa nada e permite validar depois do deploy.
 **NÃO suba** para o GitHub/Render (já protegidos pelo `.gitignore`): `*.db`
 (seu banco local, pode ter seus trades), `data_cache/`, `.venv/`, `__pycache__/`.
 
-## Passo 2: validar antes de subir (recomendado, 30 s)
+## Passo 2: validar antes de subir (recomendado, ~1 min)
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m tools.validate_etapa0   # 81 verificações sobre dado real
-.venv/bin/python -m tools.smoke_api         # 133 verificações do contrato HTTP
+.venv/bin/python -m tools.validate_etapa0    #  81 checks: matemática sobre dado real
+.venv/bin/python -m tools.smoke_api          # 137 checks: contrato HTTP
+.venv/bin/python -m tools.bench_render_free  #  31 checks: restrições do free, medidas
 ```
 
-Ambas rodam **offline** e devem terminar com `0 FALHAS`. Se falharem na sua
-máquina, não faça deploy — o problema é anterior à rede.
+As três rodam **offline** e devem terminar com `0 FALHAS`. Se falharem na sua
+máquina, não faça deploy — o problema é anterior à rede. O benchmark simula
+provedor pendurado e confirma o teto de latência; ele sozinho leva ~50 s, é o
+único demorado.
 
 ## Passo 3: subir para o GitHub
 
@@ -80,7 +84,14 @@ Sabemos que a **Binance bloqueia** IP americano (testado: devolve "restricted
 location") — por isso ela foi removida da cadeia. Deribit e Coinbase não têm esse
 bloqueio documentado, mas "não documentado" não é "testado".
 
-Leia a resposta assim:
+A resposta traz, além do estado de cada provedor, dois blocos que explicam o
+comportamento do app: `_budget` (timeout de 8 s por chamada, deadline global de
+25 s por request, disjuntor abre após 2 falhas com cooldown de 180 s) e
+`_breakers` (qual provedor está com o disjuntor aberto e em quantos segundos ele
+tenta de novo). Se o painel estiver em demo, `_breakers` diz por quê sem você
+precisar abrir log de servidor.
+
+Leia o estado dos provedores assim:
 
 - `deribit_chain.ok: true` → cenário ideal. IV, DVOL, OHLCV e funding vêm de uma
   fonte só, com preço de opção real.

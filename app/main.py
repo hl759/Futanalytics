@@ -17,6 +17,7 @@ Três regras herdadas do FutAnalytics que não mudam:
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import time
 from pathlib import Path
@@ -111,44 +112,51 @@ def _ccys(s: Settings) -> list[str]:
 
 
 # ------------------------------------------------------------------ dados com cache
-async def _candles(ccy: str, s: Settings):
+async def _candles(ccy: str, s: Settings, deadline: float | None = None):
     key = f"candles:{ccy}:{s.candle_days}:{s.provider_force}"
     hit = db.cache_get(key)
     if hit and hit.get("data"):
         return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
     data, source, debug = await provider.candles_with_fallback(
-        ccy, s.candle_days, force=s.provider_force or None)
+        ccy, s.candle_days, force=s.provider_force or None, deadline=deadline)
     db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_candles)
     db.api_usage_inc(str(dt.date.today()), len(debug.get("asked", [])))
     return data, source, debug
 
 
-async def _chain(ccy: str, s: Settings):
+async def _chain(ccy: str, s: Settings, deadline: float | None = None):
     key = f"chain:{ccy}"
     hit = db.cache_get(key)
     if hit and hit.get("data"):
         return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
-    data, source, debug = await provider.chain_with_fallback(ccy)
+    data, source, debug = await provider.chain_with_fallback(ccy, deadline=deadline)
     db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_chain)
     db.api_usage_inc(str(dt.date.today()), len(debug.get("asked", [])))
     return data, source, debug
 
 
-async def _dvol(ccy: str, s: Settings):
+async def _dvol(ccy: str, s: Settings, deadline: float | None = None):
     key = f"dvol:{ccy}:{s.dvol_days}"
     hit = db.cache_get(key)
     if hit and hit.get("data"):
         return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
-    data, source, debug = await provider.dvol_with_fallback(ccy, s.dvol_days)
+    data, source, debug = await provider.dvol_with_fallback(ccy, s.dvol_days,
+                                                            deadline=deadline)
     db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_dvol)
     db.api_usage_inc(str(dt.date.today()), 1)
     return data, source, debug
 
 
-async def _read(ccy: str, s: Settings) -> dict:
-    """Leitura completa de uma moeda: dados + superfície + VRP."""
-    (candles, c_src, c_dbg), (chain, o_src, o_dbg), (dvol, d_src, d_dbg) = (
-        await _candles(ccy, s), await _chain(ccy, s), await _dvol(ccy, s))
+async def _read(ccy: str, s: Settings, deadline: float | None = None) -> dict:
+    """Leitura completa de uma moeda: dados + superfície + VRP.
+
+    As três camadas saem em PARALELO e compartilham um único deadline. Antes eram
+    três `await` sequenciais: com provedor black-holando, candles gastava 3×20s,
+    chain 20s, dvol 20s = 100s por moeda, e duas moedas em sequência = 200s por
+    request. O painel não carregava. O cache continua valendo por camada.
+    """
+    (candles, c_src, c_dbg), (chain, o_src, o_dbg), (dvol, d_src, d_dbg) = await asyncio.gather(
+        _candles(ccy, s, deadline), _chain(ccy, s, deadline), _dvol(ccy, s, deadline))
     t0 = time.monotonic()
     try:
         read = volread.read_surface(chain, candles, dvol, ccy)
@@ -360,14 +368,19 @@ async def radar(ccy: str | None = None):
     s = load_settings()
     targets = [ccy.upper()] if ccy else _ccys(s)
     targets = [t for t in targets if t in provider.CURRENCIES] or ["BTC"]
+    # deadline ÚNICO para o request inteiro, não por chamada: é o que garante
+    # teto de latência mesmo quando várias camadas degradam ao mesmo tempo.
+    deadline = time.monotonic() + provider.DEADLINE_S
+    results = await asyncio.gather(*[_read(t, s, deadline) for t in targets],
+                                   return_exceptions=True)
     out, errors = [], {}
-    for t in targets:
-        try:
-            out.append(await _read(t, s))
-        except provider.ProviderError as e:
-            errors[t] = str(e)
-        except Exception as e:
-            errors[t] = f"{type(e).__name__}: {e}"
+    for t, r in zip(targets, results):
+        if isinstance(r, provider.ProviderError):
+            errors[t] = str(r)
+        elif isinstance(r, BaseException):
+            errors[t] = f"{type(r).__name__}: {r}"
+        else:
+            out.append(r)
     return {
         "as_of": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "settings": {"bankroll": s.bankroll, "target_dte": s.target_dte,
@@ -387,7 +400,7 @@ async def surface(ccy: str = "BTC", expiry: str | None = None, liquid_only: bool
     """Superfície crua: toda a cadeia ou um vencimento. Para conferir na corretora."""
     s = load_settings()
     ccy = ccy.upper() if ccy.upper() in provider.CURRENCIES else "BTC"
-    chain, src, dbg = await _chain(ccy, s)
+    chain, src, dbg = await _chain(ccy, s, time.monotonic() + provider.DEADLINE_S)
     rows = chain
     if expiry:
         rows = [o for o in rows if o["expiry"] == expiry]
@@ -403,8 +416,9 @@ async def history(ccy: str = "BTC", days: int = 180):
     """Séries para gráfico: DVOL (IV) × RV realizada × preço."""
     s = load_settings()
     ccy = ccy.upper() if ccy.upper() in provider.CURRENCIES else "BTC"
-    candles, c_src, _ = await _candles(ccy, s)
-    dvol, d_src, _ = await _dvol(ccy, s)
+    deadline = time.monotonic() + provider.DEADLINE_S
+    (candles, c_src, _), (dvol, d_src, _) = await asyncio.gather(
+        _candles(ccy, s, deadline), _dvol(ccy, s, deadline))
     days = max(20, min(days, s.candle_days))
     cut = candles[-days:]
     rv_series = []

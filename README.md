@@ -87,9 +87,12 @@ puro da stdlib. Sem numpy, pandas, scipy ou sklearn.
 Duas suítes, ambas offline e determinísticas:
 
 ```bash
-.venv/bin/python -m tools.validate_etapa0   # 81 verificações: MATEMÁTICA sobre dado real
-.venv/bin/python -m tools.smoke_api         # 133 verificações: CONTRATO HTTP, banco descartável
+.venv/bin/python -m tools.validate_etapa0    #  81 checks: MATEMÁTICA sobre dado real
+.venv/bin/python -m tools.smoke_api          # 137 checks: CONTRATO HTTP, banco descartável
+.venv/bin/python -m tools.bench_render_free  #  31 checks: restrições do Render free, medidas
 ```
+
+**249 verificações, 0 falhas.** As três rodam offline e são determinísticas.
 
 `tools.validate_etapa0` roda sobre `app/fixtures_real.json`: 30 velas diárias
 reais da Coinbase, 17 opções reais da Deribit e a série oficial de DVOL
@@ -233,19 +236,44 @@ tools/
 PLANO_SIGMADESK.md  plano de migração completo (770 linhas)
 ```
 
-## Render free: por que este app cabe
+## Render free: medido, não presumido
 
-- **512 MB de RAM:** sem numpy/pandas, o processo fica em ~60 MB.
-- **Sem worker em background:** todo refresh é sob demanda, com TTL de cache
-  (`chain` 15 min, `candles`/`dvol` 1 h). Nenhum processo separado.
-- **Sem dependência nova:** as mesmas quatro do FutAnalytics.
-- **SQLite efêmero:** o disco do Render free é volátil, então `db.conn()`
-  verifica e recria o schema a cada conexão (auto-reparo herdado). Persistência
-  real é `/api/backup` — exportar/importar JSON.
+```bash
+.venv/bin/python -m tools.bench_render_free   # 31 verificações, números abaixo
+```
+
+| Restrição | Teto | Medido | Como |
+|---|---|---|---|
+| RAM | 512 MB | **55 MB** (11%) | sem numpy/pandas; matemática toda em stdlib |
+| Latência no pior caso | — | **24,3 s** | deadline global de 25 s + camadas em paralelo |
+| 2ª carga com provedor morto | — | **0,30 s** | disjuntor pula quem já falhou |
+| Import (cold start) | — | **0,27 s** | nada pesado carregado no boot |
+| SQLite após 13 cargas | — | **312 KB, estável** | cache tem TTL e é sobrescrito, não acumula |
+| Dependências | as 4 originais | **fastapi, uvicorn, httpx, pydantic** | nenhuma adicionada |
+| Worker em background | proibido | **nenhum** | varredura por `threading`/`multiprocessing`/`APScheduler`/`celery` |
+
+- **O pior caso era 200 s e virou 24 s.** Antes: `candles` tentava
+  deribit→coinbase→kraken com timeout de 20 s cada (60 s), `chain` 20 s, `dvol`
+  20 s = 100 s **por moeda**, e as duas moedas eram sequenciais. Dentro deste
+  sandbox as conexões falham em 0,1 s, então media 3,5 s e parecia ótimo — mas
+  num IP de datacenter onde o provedor **black-hola** os pacotes em vez de
+  rejeitá-los, cada tentativa consome o timeout inteiro. Corrigido com timeout de
+  8 s por chamada, deadline global de 25 s por request, e as três camadas saindo
+  em `asyncio.gather` em vez de `await` sequencial.
+- **Disjuntor por provedor** (`BREAKER_FAILS=2`, cooldown 180 s): sem ele, toda
+  carga de página depois do TTL vencer pagaria de novo o timeout de um provedor
+  já sabidamente morto — até 6 vezes por visita. Com ele, a 3ª carga com cache
+  limpo levou 0,34 s.
+- **`/api/test-provider` era o endpoint menos protegido do app** — o único que
+  chamava provedor sem timeout nem deadline. Justamente o que o `DEPLOY.md` manda
+  abrir primeiro após o deploy; num black-hole penduraria 80 s. Pegou pelo
+  benchmark, não por inspeção.
+- **SQLite efêmero:** o disco do Render free é volátil, então `db.conn()` verifica
+  e recria o schema a cada conexão (auto-reparo herdado). Persistência real é
+  `/api/backup`.
 - **Nenhuma gravação automática de dado de usuário:** o único dado não-volátil
-  escrito sozinho é cache temporário com TTL, purgado na inicialização. Trades
-  só entram quando você clica em registrar. Herdado do FutAnalytics porque era um
-  pedido explícito, e continua sendo a decisão certa.
+  escrito sozinho é cache temporário com TTL, purgado na inicialização. Trades só
+  entram quando você clica em registrar.
 - **Health check em `/api/health`:** não toca em nenhuma API externa, então
   responde 200 mesmo com Deribit e Coinbase fora do ar (o app cai no demo em vez
   de morrer).

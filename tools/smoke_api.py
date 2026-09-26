@@ -182,8 +182,19 @@ def main() -> int:
         tp = jget(c, "/api/test-provider")
         check(isinstance(tp, dict) and len(tp) >= 4, "test-provider diagnostica cada provedor",
               f"-> {sorted(tp)}")
-        check(all("error" in v or v.get("ok") for v in tp.values() if isinstance(v, dict)),
+        # chaves com "_" são METADADOS (orçamento de tempo, disjuntores), não
+        # sondagem de provedor — o invariante vale para as entradas de provedor.
+        probes = {k: v for k, v in tp.items() if not k.startswith("_") and isinstance(v, dict)}
+        check(len(probes) >= 4, "há sondagem para cada provedor da cadeia",
+              f"-> {sorted(probes)}")
+        check(all("error" in v or "ok" in v for v in probes.values()),
               "cada provedor reporta ok OU o erro real (nunca silêncio)")
+        check(all(v.get("ms") is not None for v in probes.values()),
+              "cada sondagem reporta o tempo gasto (para ver o teto na prática)",
+              f"-> máx {max((v.get('ms') or 0) for v in probes.values())} ms")
+        check("_budget" in tp and tp["_budget"].get("deadline_global_s"),
+              "orçamento de tempo exposto na tela", f"-> {tp.get('_budget')}")
+        check("_breakers" in tp, "estado dos disjuntores exposto na tela")
 
         # ------------------------------------------------------------ trades
         print("\n[trades — o ciclo que nasceu quebrado]")
