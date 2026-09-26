@@ -1,787 +1,599 @@
-"""FutAnalytics v2.3: plataforma de análise diária de futebol.
+"""SigmaDesk — API FastAPI (Etapa 0: camada de dados validada + leitura de vol).
 
-v2.3 — "Trader Free":
-- ODDS REAIS GRÁTIS e sem chave (football-data.co.uk: B365 + Pinnacle das
-  próximas rodadas); demais linhas de gols derivadas do consenso por inversão
-  Poisson — marcadas como "derivada". Sem preço, o app mostra a odd justa do
-  modelo, sem fingir mercado.
-- Seleção por EQUILÍBRIO acerto × odd (modo padrão "balanced") e múltipla com
-  alvo de odd configurável;
-- CHECKLIST DO TRADER por jogo (amostra, insumo, modelo×mercado, descanso,
-  tendência, H2H, liga) com nota 0–10 e selo A/B/C;
-- NADA é gravado automaticamente: o modo sombra deixou de existir. Bilhetes,
-  resultados e CLV só entram quando VOCÊ registra; o único dado não-volátil
-  escrito sozinho é o cache temporário das APIs (expira e é limpo sozinho) —
-  sem ele as cotas gratuitas estourariam na primeira meia hora.
+Escopo desta etapa, por decisão do usuário: PROVAR que a camada de dados
+funciona antes de construir o motor em cima. Por isso aqui já existe leitura
+real de volatilidade (IV × RV × VRP), mas ainda não existe recomendação de
+estrutura, sizing por estresse nem checklist A/B/C — isso é Etapa 1-4.
 
-v2 (mantida) — ganhos validados em backtest (app/backtest.py):
-- xG do Understat, dois horizontes de força, modelo conjunto por liga,
-  calibração isotônica, peso do mercado 0.25, Kelly com incerteza, CLV.
+Três regras herdadas do FutAnalytics que não mudam:
+
+1. NADA É GRAVADO SOZINHO. Trades, resultados e CVL só entram quando o usuário
+   clica. O único dado escrito automaticamente é cache temporário com TTL e
+   purga na inicialização — sem ele as cotas gratuitas estourariam.
+2. FALHA é diferente de VAZIO (lição da v2.4.1). O painel mostra qual provedor
+   foi pedido, qual foi usado e o erro exato de cada um. Nunca silêncio.
+3. HONESTIDADE DE FONTE. Todo número carrega `source`: deribit / coinbase /
+   kraken / demo. IV sintética nunca se passa por preço de mercado.
 """
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
-import json
-import sqlite3
-from datetime import date
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import calibration, db, joint, odds_fd, provider, understat
-from .model import (
-    MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
-    candidate_markets, de_vig_markets, flat_stake, kelly_stake, league_priors,
-    league_xg_priors, pick_best_market, trader_checklist,
-)
+from . import db, provider, volread
 
-app = FastAPI(title="FutAnalytics")
+APP_NAME = "SigmaDesk"
+VERSION = "0.1.0-etapa0"
+CODENAME = "camada de dados validada"
+
+app = FastAPI(title=APP_NAME, version=VERSION)
 db.init()
-
-VERSION = "2.4.4"
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 
 
-# ------------------------------------------------------------------ settings
+# ------------------------------------------------------------------ configurações
 class Settings(BaseModel):
-    provider: str = "demo"            # demo | fd | af | openliga | espn (fallback automático sempre ativo)
-    fd_token: str = ""
-    af_key: str = ""
+    # capital (decisão 2 do usuário: configurável, padrão editável)
     bankroll: float = 1000.0
+    display_currency: str = "USD"
+
+    # universo (decisão 4: SÓ BTC e ETH)
+    currencies: str = "BTC,ETH"
+
+    # risco (decisão 3: SÓ risco definido até haver CVL acumulado)
+    defined_risk_only: bool = True
+    naked_short_enabled: bool = False
+    portfolio_min_grade: str = "B"
+    max_positions: int = 4
     kelly_fraction: float = 0.25
     stake_cap_pct: float = 3.0
-    min_ev: float = 3.0               # EV mínimo (%) para recomendar aposta
-    model_weight: float = 0.25        # peso do modelo na mistura (v2: 0.25)
-    xg_weight: float = 0.65           # peso do xG sobre gols brutos (0 = desligar)
-    use_calibration: bool = True      # aplicar curvas isotônicas treinadas
-    kelly_uncertainty: bool = True    # Kelly desconta incerteza da amostra
-    pick_mode: str = "balanced"       # v2.3: "balanced" = acerto × odd | "prob" | "ev"
-    target_parlay_odd: float = 2.8    # odd-alvo da múltipla
-    min_leg_odd: float = 1.12         # perna abaixo disso só se não houver alternativa
-    multiple_min_grade: str = "B"     # selo mínimo da múltipla: "B" = só A/B (nunca C)
-    use_fd_odds: bool = True          # odds reais grátis (football-data.co.uk)
-    derive_margin: float = 0.06       # margem aplicada nas linhas derivadas do consenso
+    max_vega_pct: float = 10.0          # teto de vega agregado (% do capital)
+    max_net_short_premium_pct: float = 5.0
+
+    # parâmetros de estresse (o sizing pergunta o pior destes três)
+    stress_iv_bump: float = 3.0          # pontos de IV contra
+    stress_rv_multiple: float = 2.0      # RV realizada = 2x a prevista
+    stress_gap_sigma: float = 2.0        # gap adverso no subjacente
+
+    # modelo (herdado do FutAnalytics: 25% modelo, 75% mercado)
+    model_weight: float = 0.25
+    use_calibration: bool = True
+    max_spread_pct: float = 0.25
+    min_oi: float = 0.5
+
+    # horizonte preferido para o VRP
+    target_dte: float = 30.0
+
+    # cache (orçamento de chamadas do Render free)
+    ttl_chain: int = 900                 # 15 min: superfície inteira em 1 chamada
+    ttl_candles: int = 3600
+    ttl_dvol: int = 3600
+    candle_days: int = 400
+    dvol_days: int = 400
+
+    # provedor
+    provider_force: str = ""             # "" = cadeia automática com fallback
+    binance_enabled: bool = False        # geo-bloqueada em IP dos EUA (Render)
+
+
+DEFAULTS = Settings()
 
 
 def load_settings() -> Settings:
-    raw = db.get_setting("settings")
-    if raw:
-        s = Settings(**json.loads(raw))
-    else:
-        s = Settings()
-    # Em hospedagem (Render etc.) o disco pode ser apagado a cada deploy;
-    # variáveis de ambiente garantem que token e provedor sobrevivam.
-    import os
-    if not s.fd_token and os.environ.get("FD_TOKEN"):
-        s.fd_token = os.environ["FD_TOKEN"]
+    vals = {}
+    for name, default in DEFAULTS.model_dump().items():
+        raw = db.get_setting(name)
         if raw is None:
-            s.provider = "fd"
-    if not s.af_key and os.environ.get("AF_KEY"):
-        s.af_key = os.environ["AF_KEY"]
-    return s
+            continue
+        try:
+            if isinstance(default, bool):
+                vals[name] = str(raw).lower() in ("1", "true", "yes", "on")
+            elif isinstance(default, int) and not isinstance(default, bool):
+                vals[name] = int(float(raw))
+            elif isinstance(default, float):
+                vals[name] = float(raw)
+            else:
+                vals[name] = str(raw)
+        except (TypeError, ValueError):
+            continue
+    return Settings(**vals)
 
 
-# ------------------------------------------------------------------ backup
-# O Render free apaga o disco a cada deploy; estes endpoints permitem baixar
-# TUDO que importa (configurações + bilhetes, incluindo CLV e modo sombra) em
-# um JSON portátil e restaurar depois. Cache e contadores de API não vão no
-# arquivo: são transitórios e inflariam o backup à toa.
-
-_BET_COLS = ["id", "created_at", "match_date", "label", "market", "selection",
-             "odd", "stake", "prob", "ev", "is_multiple", "legs", "status",
-             "profit", "shadow", "closing_odd", "clv"]
+def _ccys(s: Settings) -> list[str]:
+    out = [c.strip().upper() for c in (s.currencies or "BTC,ETH").split(",") if c.strip()]
+    return [c for c in out if c in provider.CURRENCIES] or ["BTC"]
 
 
-@app.get("/api/backup")
-def export_backup():
-    with db.conn() as c:
-        bets = [dict(r) for r in c.execute(
-            "SELECT * FROM bets ORDER BY id").fetchall()]
-        raw = c.execute("SELECT value FROM settings WHERE key='settings'").fetchone()
-    payload = {
-        "app": "futanalytics",
-        "schema": 2,
-        "exported_at": dt.datetime.now().isoformat(timespec="seconds"),
-        "settings": json.loads(raw["value"]) if raw else {},
-        "bets": [{k: b.get(k) for k in _BET_COLS} for b in bets],
-    }
-    fname = f'futanalytics-backup-{date.today().isoformat()}.json'
-    return JSONResponse(
-        content=payload,
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
+# ------------------------------------------------------------------ dados com cache
+async def _candles(ccy: str, s: Settings):
+    key = f"candles:{ccy}:{s.candle_days}:{s.provider_force}"
+    hit = db.cache_get(key)
+    if hit and hit.get("data"):
+        return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
+    data, source, debug = await provider.candles_with_fallback(
+        ccy, s.candle_days, force=s.provider_force or None)
+    db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_candles)
+    db.api_usage_inc(str(dt.date.today()), len(debug.get("asked", [])))
+    return data, source, debug
 
 
-@app.post("/api/backup")
-def import_backup(payload: dict):
-    """Restaura um backup: substitui bilhetes e configurações atuais.
-
-    Preserva ids dos bilhetes. Colunas que não existiam na versão que gerou o
-    arquivo entram com o padrão do schema atual (compatível com backups v1).
-    """
-    if payload.get("app") != "futanalytics":
-        raise HTTPException(400, "Este arquivo não é um backup do FutAnalytics.")
-    bets = payload.get("bets") or []
-    settings = payload.get("settings")
-    n = 0
-    with db.conn() as c:
-        c.execute("DELETE FROM bets")
-        for b in bets:
-            try:
-                row = {k: b.get(k) for k in _BET_COLS}
-                row["id"] = int(row["id"] or 0)
-                row["odd"] = float(row["odd"] or 0)
-                row["stake"] = float(row["stake"] or 0)
-                row["shadow"] = 1 if row["shadow"] else 0
-                row["is_multiple"] = 1 if row["is_multiple"] else 0
-                c.execute(
-                    f"INSERT INTO bets({', '.join(_BET_COLS)}) "
-                    f"VALUES({', '.join('?' * len(_BET_COLS))})",
-                    tuple(row[k] for k in _BET_COLS),
-                )
-                n += 1
-            except (ValueError, TypeError, sqlite3.Error):
-                continue  # bilhete corrompido no arquivo: pula, não aborta
-    if isinstance(settings, dict) and settings:
-        db.set_setting("settings", json.dumps(settings))
-    return {"ok": True, "bets": n}
+async def _chain(ccy: str, s: Settings):
+    key = f"chain:{ccy}"
+    hit = db.cache_get(key)
+    if hit and hit.get("data"):
+        return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
+    data, source, debug = await provider.chain_with_fallback(ccy)
+    db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_chain)
+    db.api_usage_inc(str(dt.date.today()), len(debug.get("asked", [])))
+    return data, source, debug
 
 
+async def _dvol(ccy: str, s: Settings):
+    key = f"dvol:{ccy}:{s.dvol_days}"
+    hit = db.cache_get(key)
+    if hit and hit.get("data"):
+        return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
+    data, source, debug = await provider.dvol_with_fallback(ccy, s.dvol_days)
+    db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_dvol)
+    db.api_usage_inc(str(dt.date.today()), 1)
+    return data, source, debug
+
+
+async def _read(ccy: str, s: Settings) -> dict:
+    """Leitura completa de uma moeda: dados + superfície + VRP."""
+    (candles, c_src, c_dbg), (chain, o_src, o_dbg), (dvol, d_src, d_dbg) = (
+        await _candles(ccy, s), await _chain(ccy, s), await _dvol(ccy, s))
+    t0 = time.monotonic()
+    try:
+        read = volread.read_surface(chain, candles, dvol, ccy)
+    except Exception as e:                      # nunca derruba o painel
+        read = {"ok": False, "ccy": ccy, "error": f"{type(e).__name__}: {e}"}
+    read["sources"] = {"candles": c_src, "options": o_src, "dvol": d_src}
+    read["debug"] = {"candles": c_dbg, "options": o_dbg, "dvol": d_dbg}
+    read["compute_ms"] = round((time.monotonic() - t0) * 1000, 1)
+    read["is_demo"] = "demo" in (c_src, o_src, d_src)
+    read["params"] = volread.PARAMS
+    read["as_of"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    return read
+
+
+# ------------------------------------------------------------------ endpoints
 @app.get("/api/version")
 def version():
-    return {"version": VERSION}
+    return {"app": APP_NAME, "version": VERSION, "codename": CODENAME,
+            "lineage": "FutAnalytics v2.4.4 -> SigmaDesk (migração de arquitetura preditiva)",
+            "etapa": 0,
+            "escopo_etapa": "camada de dados validada contra APIs reais + leitura de vol"}
 
 
 @app.get("/api/model-info")
 def model_info():
-    """Diagnóstico do motor: quais recursos da v2 estão ativos."""
-    cals = calibration.load_all()
+    s = load_settings()
     return {
-        "version": VERSION,
-        "calibration_loaded": bool(cals),
-        "calibration_modes": {m: sorted(v.keys()) for m, v in cals.items()},
-        "xg_leagues": sorted(understat.UNDERSTAT_LEAGUES.keys()),
-        "params": {
-            "model_weight_default": 0.25,
-            "form_weight": 0.25,
-            "decay_long_halflife_days": round(0.6931 / 0.012, 0),
-            "decay_short_halflife_days": round(0.6931 / 0.06, 0),
-            "target_parlay_odd_default": 2.8,
+        "mercado": "volatilidade de criptoativos (opções BTC/ETH, Deribit)",
+        "sinal_mestre": "VRP = IV implícita − RV prevista",
+        "motor": ("dois horizontes EWMA (meia-vida 58d/11d, peso curto 25%) + "
+                  "estimadores de amplitude (Parkinson/Garman-Klass/Yang-Zhang) + "
+                  "separação de salto por bipower variation"),
+        "parametros": volread.PARAMS,
+        "heranca": {
+            "DECAY_LONG/DECAY_SHORT/SHORT_WEIGHT": "PARAMS do FutAnalytics (model.py)",
+            "RANGE_WEIGHT/RANGE_MIN_BARS": "XG_WEIGHT/XG_MIN_COVERAGE",
+            "REGIME_PRIOR_STRENGTH": "LEAGUE_PRIOR_STRENGTH",
+            "model_weight 0.25": "blend_markets(model, odds, 0.25)",
         },
-        "fd_odds": {
-            "leagues": sorted(odds_fd.LEAGUE_TO_DIV.keys()),
-            "books": ["Bet365", "Pinnacle"],
-        },
+        "anualizacao": "sqrt(365) — cripto não tem dia útil",
+        "universo": _ccys(s),
+        "risco_definido_apenas": s.defined_risk_only,
+        "venda_descoberta": s.naked_short_enabled,
+        "pendente": ["estruturas e precificação (Etapa 3)",
+                     "checklist A/B/C (Etapa 3)",
+                     "cross-section ridge (Etapa 4)",
+                     "backtest QLIKE/CVL (Etapa 5)"],
     }
 
 
 @app.get("/api/settings")
 def get_settings():
-    s = load_settings()
-    d = s.model_dump()
-    # não vazar chaves completas para o front
-    d["fd_token"] = ("*" * 6 + s.fd_token[-4:]) if s.fd_token else ""
-    d["af_key"] = ("*" * 6 + s.af_key[-4:]) if s.af_key else ""
-    d["has_fd"] = bool(s.fd_token)
-    d["has_af"] = bool(s.af_key)
-    return d
+    return load_settings().model_dump()
 
 
 class SettingsIn(BaseModel):
-    provider: str | None = None
-    fd_token: str | None = None
-    af_key: str | None = None
     bankroll: float | None = None
+    display_currency: str | None = None
+    currencies: str | None = None
+    defined_risk_only: bool | None = None
+    naked_short_enabled: bool | None = None
+    portfolio_min_grade: str | None = None
+    max_positions: int | None = None
     kelly_fraction: float | None = None
     stake_cap_pct: float | None = None
-    min_ev: float | None = None
+    max_vega_pct: float | None = None
+    max_net_short_premium_pct: float | None = None
+    stress_iv_bump: float | None = None
+    stress_rv_multiple: float | None = None
+    stress_gap_sigma: float | None = None
     model_weight: float | None = None
-    xg_weight: float | None = None
     use_calibration: bool | None = None
-    kelly_uncertainty: bool | None = None
-    pick_mode: str | None = None
-    target_parlay_odd: float | None = None
-    min_leg_odd: float | None = None
-    multiple_min_grade: str | None = None
-    use_fd_odds: bool | None = None
-    derive_margin: float | None = None
+    max_spread_pct: float | None = None
+    min_oi: float | None = None
+    target_dte: float | None = None
+    ttl_chain: int | None = None
+    ttl_candles: int | None = None
+    ttl_dvol: int | None = None
+    candle_days: int | None = None
+    dvol_days: int | None = None
+    provider_force: str | None = None
+    binance_enabled: bool | None = None
+
+
+# Limites de sanidade. BUG PEGO NO SMOKE TEST DA ETAPA 0: POST /api/settings
+# aceitava `bankroll: -50` e gravava. Como stake_pct = notional/bankroll*100, um
+# capital negativo produziu sizing de −3108% — e um capital ZERO daria divisão por
+# zero no /api/portfolio. Configuração de risco sem limite não é configuração, é
+# armadilha: o único campo que separa uma estrutura dimensionada de uma aposta
+# descuidada é justamente este número.
+#
+# (mínimo, máximo) — None significa "sem limite naquele lado".
+BOUNDS: dict[str, tuple[float | None, float | None]] = {
+    "bankroll": (1.0, None),                    # > 0: entra em TODO cálculo de tamanho
+    "kelly_fraction": (0.0, 1.0),               # fração de Kelly, nunca acima de full
+    "stake_cap_pct": (0.0, 100.0),
+    "max_vega_pct": (0.0, 100.0),
+    "max_net_short_premium_pct": (0.0, 100.0),
+    "max_spread_pct": (0.0, 100.0),
+    "min_oi": (0.0, None),
+    "model_weight": (0.0, 1.0),                 # 0=tudo mercado, 1=tudo modelo
+    "target_dte": (1.0, 730.0),
+    "stress_iv_bump": (0.0, 50.0),
+    "stress_rv_multiple": (1.0, 10.0),          # <1 não é estresse, é alívio
+    "stress_gap_sigma": (0.0, 10.0),
+    "max_positions": (1, 50),
+    "ttl_chain": (0, 86400),
+    "ttl_candles": (0, 86400),
+    "ttl_dvol": (0, 86400),
+    "candle_days": (30, 3000),
+    "dvol_days": (30, 3000),
+}
+# mudar qualquer uma destas invalida as leituras em cache
+_INVALIDATES_CACHE = {"currencies", "candle_days", "dvol_days", "provider_force",
+                      "binance_enabled", "min_oi", "max_spread_pct", "target_dte"}
 
 
 @app.post("/api/settings")
 def save_settings(body: SettingsIn):
-    s = load_settings()
-    data = s.model_dump()
-    for k, v in body.model_dump(exclude_none=True).items():
-        if k in ("fd_token", "af_key") and v.startswith("*"):
-            continue  # máscara devolvida, não sobrescrever
-        data[k] = v
-    db.set_setting("settings", json.dumps(data))
-    return {"ok": True}
+    """Atualiza o perfil. ALL-OR-NOTHING.
+
+    Por que não aplicar só os campos válidos: isto é um PERFIL DE RISCO, não uma
+    lista de preferências. O dimensionamento de uma estrutura depende da
+    COMBINAÇÃO (capital × teto de vega × fração de Kelly × DTE alvo). Aplicar
+    metade de um payload com erro produziria um perfil que o usuário nunca
+    revisou e nunca aprovou — e ele descobriria isso olhando o tamanho de uma
+    posição, não a tela de configuração. Rejeitar tudo com 422 e dizer exatamente
+    o que está errado é mais barato que desfazer depois.
+
+    BUG PEGO NO SMOKE TEST DA ETAPA 0: este handler não validava nada.
+    `bankroll: -50` era gravado; como stake_pct = notional/bankroll*100, o sizing
+    do trade seguinte saiu −3108%. Com bankroll 0 haveria divisão por zero no
+    /api/portfolio.
+    """
+    incoming = body.model_dump(exclude_none=True)
+    rejected: dict[str, str] = {}
+
+    for k, v in incoming.items():
+        if k == "currencies" and v:
+            v = ",".join(c.strip().upper() for c in v.split(",") if c.strip())
+            parts = [c for c in v.split(",") if c]
+            bad = [c for c in parts if c not in provider.CURRENCIES]
+            if not parts:
+                rejected[k] = "universo vazio"
+            elif bad:
+                rejected[k] = (f"fora do escopo: {','.join(bad)} "
+                               f"(v1 é só {','.join(provider.CURRENCIES)})")
+            incoming[k] = v
+            continue
+        if k == "display_currency" and v not in ("USD", "BRL"):
+            rejected[k] = f"moeda de exibição inválida: {v} (USD ou BRL)"
+            continue
+        if k == "portfolio_min_grade" and v not in ("A", "B", "C"):
+            rejected[k] = f"grade inválido: {v} (A, B ou C)"
+            continue
+        if k == "provider_force" and v not in ("", "auto", "deribit", "coinbase",
+                                               "kraken", "demo"):
+            rejected[k] = f"provider desconhecido: {v}"
+            continue
+        b = BOUNDS.get(k)
+        if b and isinstance(v, (int, float)) and not isinstance(v, bool):
+            lo, hi = b
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                rejected[k] = (f"{v} fora do intervalo "
+                               f"[{lo if lo is not None else '-inf'}, "
+                               f"{hi if hi is not None else '+inf'}]")
+                continue
+        incoming[k] = v
+
+    if rejected:                                  # nada é gravado
+        raise HTTPException(422, {
+            "erro": "configuração rejeitada; nada foi alterado",
+            "rejected": rejected,
+            "aceitos_que_nao_foram_aplicados": sorted(set(incoming) - set(rejected)),
+            "settings": load_settings().model_dump(),
+        })
+
+    saved = {}
+    for k, v in incoming.items():
+        db.set_setting(k, str(v))
+        saved[k] = v
+
+    # invalida o cache de leitura SE algo que afeta os dados mudou.
+    # (o código anterior tinha aqui um `for ... : pass` — invalidação nenhuma
+    # acontecia, então trocar o universo servia a superfície antiga até o TTL.)
+    cleared = 0
+    if set(saved) & _INVALIDATES_CACHE:
+        # só os prefixos que _candles/_chain/_dvol realmente escrevem
+        for prefix in ("chain:", "candles:", "dvol:"):
+            cleared += db.cache_clear(prefix)
+
+    return {"ok": True, "saved": saved, "rejected": {},
+            "cache_cleared": cleared,
+            "settings": load_settings().model_dump()}
 
 
 @app.get("/api/test-provider")
-async def test_provider(which: str):
-    """Diagnóstico de conexão: valida a chave e explica qualquer problema."""
-    s = load_settings()
+async def test_provider(which: str = "all", ccy: str = "BTC"):
+    ccy = ccy.upper() if ccy.upper() in provider.CURRENCIES else "BTC"
     try:
-        if which == "af":
-            if not s.af_key:
-                return {"ok": False, "msg": "Nenhuma chave da API-Football salva. Cole a chave e clique em Salvar antes de testar."}
-            info = await provider.af_status(s.af_key)
-            msg = f"Chave válida · plano {info['plan']} · uso hoje {info['requests_today']}/{info['requests_limit']}."
-            if not info.get("current_season_ok"):
-                msg += " PORÉM: " + info.get(
-                    "season_error",
-                    "o plano não retornou jogos da temporada atual.",
-                )
-                return {"ok": False, "msg": msg}
-            return {"ok": True, "msg": msg + " Acesso à temporada atual confirmado."}
-        if which == "fd":
-            if not s.fd_token:
-                return {"ok": False, "msg": "Nenhum token da football-data.org salvo. Cole o token e clique em Salvar antes de testar."}
-            info = await provider.fd_status(s.fd_token)
-            comps = ", ".join(info["competitions"][:6])
-            return {"ok": True, "msg": f"Token válido. Competições cobertas: {comps}."}
-        if which == "openliga":
-            fx = await provider.openliga_fixtures(str(date.today()))
-            return {"ok": True, "msg": f"OpenLigaDB OK: {len(fx)} jogos hoje (grátis, sem chave, sem cota)."}
-        if which == "espn":
-            fx = await provider.espn_fixtures(str(date.today()))
-            return {"ok": True, "msg": f"ESPN OK: {len(fx)} jogos hoje (grátis, sem chave, cobre Brasileirão)."}
-        if which == "us":
-            games = await understat.team_history("Premier League", "Manchester City")
-            n = len(games or [])
-            if n:
-                return {"ok": True, "msg": f"Understat OK: {n} jogos com xG recuperados para Manchester City."}
-            return {"ok": False, "msg": "Understat indisponível neste momento (o motor segue com gols brutos + calibração modo goals)."}
-        return {"ok": False, "msg": "Provedor desconhecido."}
-    except provider.ProviderError as e:
-        return {"ok": False, "msg": str(e)}
+        return await provider.status(which, ccy)
     except Exception as e:
-        return {"ok": False, "msg": f"Falha de conexão: {e}"}
+        raise HTTPException(502, f"{type(e).__name__}: {e}")
 
 
-# ------------------------------------------------------------------ análise
-async def _load_fixtures(s: Settings, day: str):
-    """Carrega jogos com fallback automático: fd -> openliga -> espn -> demo (v2.4)"""
-    # provedores novos podem ser selecionados manualmente para teste
-    if s.provider == "openliga":
-        return await provider.openliga_fixtures(day)
-    if s.provider == "espn":
-        return await provider.espn_fixtures(day)
-    if s.provider == "demo":
-        return provider.demo_fixtures(day)
-
-    # fd ou af com fallback automático
-    try:
-        fixtures, used, info = await provider.fixtures_with_fallback(
-            s.provider, day, s.fd_token, s.af_key
-        )
-        # guarda info de fallback no cache para o endpoint /api/day mostrar
-        db.cache_set(f"fallback:info:{day}", info, 3600)
-        db.cache_set(f"fallback:used:{day}", used, 3600)
-        return fixtures
-    except Exception:
-        # último recurso: demo nunca falha
-        return provider.demo_fixtures(day)
-
-
-async def _team_games(s: Settings, fx: dict, side: str, day: str):
-    """Histórico do time; prioriza Understat (gols + xG), cai para o provedor."""
-    team = fx[side]
-    if s.xg_weight > 0:
-        try:
-            us = await understat.team_history(fx["league"], team["name"])
-            if us and len(us) >= 6:
-                return us
-        except Exception:
-            pass
-    prov = fx.get("provider", "demo")
-    if prov == "fd":
-        if s.fd_token:
-            try:
-                return await provider.fd_team_recent(s.fd_token, team["id"], team["name"])
-            except Exception:
-                pass
-        # sem token ou falhou: tenta histórico do fallback
-        try:
-            return await provider.openliga_team_recent(team["id"], team["name"])
-        except Exception:
-            return []
-    if prov == "af":
-        if s.af_key:
-            try:
-                return await provider.af_team_recent(s.af_key, team["id"], team["name"])
-            except Exception:
-                return []
-        return []
-    if prov == "openliga":
-        return await provider.openliga_team_recent(team["id"], team["name"])
-    if prov == "espn":
-        return await provider.espn_team_recent(team["id"], team["name"])
-    return provider.demo_team_recent(day, team)
-
-
-async def _team_games_for(s: Settings, fx: dict, day: str):
-    """Busca o histórico dos dois times, tratando erro por jogo.
-
-    v2.3.1: captura QUALQUER exceção (httpx, JSON, KeyError...). Antes só
-    ProviderError era tratado e qualquer outro erro derrubava o /api/day
-    inteiro — nenhum jogo do dia aparecia.
-    """
-    try:
-        hg, ag = await asyncio.gather(
-            _team_games(s, fx, "home", day),
-            _team_games(s, fx, "away", day),
-        )
-        return hg, ag, None
-    except provider.ProviderError as e:
-        return None, None, str(e)
-    except Exception as e:
-        return None, None, f"Falha ao buscar histórico: {type(e).__name__}: {e}"
-
-
-_CALIB_CACHE: dict = {"data": None}
-
-
-def _get_calibrators(mode: str) -> dict:
-    """Curvas do modo pedido; recarrega se o arquivo mudou."""
-    if _CALIB_CACHE["data"] is None:
-        _CALIB_CACHE["data"] = calibration.load_all()
-    return (_CALIB_CACHE["data"] or {}).get(mode, {})
-
-
-async def _analyze_fixture(s: Settings, fx: dict, hg, ag, home_avg, away_avg,
-                           xg_home_avg, xg_away_avg, with_odds: bool):
-    """Analisa um jogo com histórico já baixado e priores de liga específicos.
-
-    v2.2: nas ligas com xG (Understat), o λ vem do MODELO CONJUNTO por liga
-    (app/joint.py) — ajustado por adversário, sem viés de calendário. O
-    estimador por time continua como fallback e fonte de tendências.
-    """
-    ts_home = TeamSample(fx["home"]["name"], [tuple(g) for g in hg])
-    ts_away = TeamSample(fx["away"]["name"], [tuple(g) for g in ag])
-    lam_override = None
-    ctx = None
-    if s.xg_weight > 0 and fx["league"] in understat.UNDERSTAT_LEAGUES:
-        try:
-            lg_matches = await understat.league_matches(fx["league"])
-            if lg_matches and len(lg_matches) >= joint.MIN_MATCHES:
-                day = str(date.today())
-                key = f"joint:{fx['league']}:{day}"
-                model = db.cache_get(key)
-                if model is None:
-                    model = joint.fit_league(lg_matches, date.today())
-                    if model is not None:
-                        db.cache_set(key, model, 12 * 3600)
-                if model is not None:
-                    # nomes do provedor -> títulos do Understat (ex.: "Man City")
-                    titles = sorted({m["home"] for m in lg_matches} | {m["away"] for m in lg_matches})
-                    us_h = understat.match_understat_team(fx["home"]["name"], titles)
-                    us_a = understat.match_understat_team(fx["away"]["name"], titles)
-                    if us_h and us_a:
-                        lams = joint.predict_lambdas(model, us_h, us_a)
-                        if lams:
-                            lam_override = lams
-            ctx = await understat.league_context(fx["league"], fx["home"]["name"], fx["away"]["name"])
-        except Exception:
-            pass  # contexto é ganho, não dependência
-
-    analysis = analyze_match(
-        ts_home, ts_away,
-        home_avg=home_avg, away_avg=away_avg,
-        xg_home_avg=xg_home_avg, xg_away_avg=xg_away_avg,
-        xg_weight=s.xg_weight,
-        lam_override=lam_override,
-    )
-    if ctx:
-        analysis["league_env"] = {k: v for k, v in ctx.items() if k != "h2h"}
-        analysis["h2h"] = ctx.get("h2h", [])
-
-    # ---------------- odds: real (API-Football) → real grátis (fd.co.uk) → justa
-    odds = None
-    odds_meta = None
-    if with_odds:
-        if fx["provider"] == "af":
-            try:
-                odds = await provider.af_odds(s.af_key, int(fx["id"].split("-")[1]))
-                odds = odds or None
-                if odds:
-                    odds_meta = {"source": "API-Football",
-                                 "real": sorted(odds.keys()), "derived": []}
-            except provider.ProviderError:
-                odds = None
-        elif fx["provider"] == "demo":
-            odds = provider.demo_odds(fx["id"], analysis["fair_odds"])
-            odds_meta = {"source": "demo",
-                         "real": sorted(odds.keys()), "derived": []}
-    if odds is None and s.use_fd_odds and fx["provider"] in ("fd", "af"):
-        # camada gratuita: B365/Pinnacle das ligas europeias cobertas;
-        # as demais linhas vêm derivadas do consenso (marcadas "derived").
-        try:
-            pack = await odds_fd.odds_for_match(
-                fx["league"], fx["home"]["name"], fx["away"]["name"],
-                fx.get("kickoff_utc", ""), s.derive_margin)
-        except Exception:
-            pack = None
-        if pack:
-            odds, odds_meta = pack["odds"], pack["meta"]
-
-    # v2: calibra as probabilidades do modelo ANTES de misturar com o mercado.
-    # As curvas são por modo (xg/goals) porque a distribuição muda com o insumo.
-    if s.use_calibration:
-        mode = ("joint" if lam_override is not None
-                else ("xg" if analysis.get("xg_used") else "goals"))
-        calibrated = calibration.apply_calibration(analysis["markets"], _get_calibrators(mode))
-        if calibrated != analysis["markets"]:
-            analysis["model_markets"] = analysis["markets"]
-            analysis["calibrated"] = True
-            analysis["markets"] = calibrated
-            analysis["fair_odds"] = {
-                k: round(1 / v, 2) if v > 0.01 else 99.0 for k, v in calibrated.items()
-            }
-
-    # Mistura com o consenso do mercado (margem removida), peso configurável.
-    # Só entram no blend os preços REAIS — odds derivadas nascem do consenso e
-    # não carregam informação nova; entrariam como vício circular.
-    blend_src = None
-    if odds:
-        if odds_meta and odds_meta.get("source") == "football-data.co.uk":
-            real_keys = set(odds_meta.get("real") or [])
-            blend_src = {k: v for k, v in odds.items() if k in real_keys} or None
-        else:
-            blend_src = odds
-    if blend_src:
-        blended = blend_markets(analysis["markets"], blend_src, s.model_weight)
-        if "model_markets" not in analysis:
-            analysis["model_markets"] = analysis["markets"]
-        analysis["markets"] = blended
-        analysis["fair_odds"] = {
-            k: round(1 / v, 2) if v > 0.01 else 99.0 for k, v in blended.items()
-        }
-
-    # probabilidade implícita do mercado por mercado (para o checklist):
-    # reais via devig; derivadas desfazendo a margem que aplicamos.
-    odds_devig = None
-    if odds:
-        src = blend_src if (odds_meta and odds_meta.get("source") == "football-data.co.uk") else odds
-        odds_devig = de_vig_markets(src or {}) or {}
-        if odds_meta and odds_meta.get("derived"):
-            for mk in odds_meta["derived"]:
-                o = odds.get(mk)
-                if o and o > 1.0:
-                    odds_devig[mk] = (1.0 - s.derive_margin) / o
-
-    best = pick_best_market(analysis, odds, mode=s.pick_mode, odds_meta=odds_meta)
-
-    # checklist do trader POR CANDIDATO: a múltipla só aceita pernas com selo
-    # A/B (nunca C), então cada ângulo possível do jogo já sai com seu selo.
-    # O checklist exibido no card é o do pick principal.
-    rest_home = hg[0][0] if hg else None
-    rest_away = ag[0][0] if ag else None
-    leg_grades: dict = {}
-    checklist = None
-    for c in candidate_markets(analysis, odds, mode=s.pick_mode, odds_meta=odds_meta):
-        cl = trader_checklist(analysis, {"market": c["market"], "prob": c["prob"]},
-                              odds_devig, rest_home, rest_away)
-        leg_grades[c["market"]] = {"grade": cl["grade"], "score": cl["score"]}
-        if best and c["market"] == best["market"]:
-            checklist = cl
-    analysis["leg_grades"] = leg_grades
-    if checklist is None:
-        checklist = trader_checklist(analysis, best, odds_devig, rest_home, rest_away)
-    analysis["checklist"] = checklist
-    if best:
-        best["grade"] = checklist["grade"]
-        best["check_score"] = checklist["score"]
-    n_eff = (analysis["sample_home"] + analysis["sample_away"]) / 2
-    stake = None
-    if best:
-        if s.pick_mode == "ev":
-            stake = kelly_stake(
-                best["prob"], best["odd"], s.bankroll,
-                s.kelly_fraction, s.stake_cap_pct / 100,
-                n_eff=n_eff, uncertainty=s.kelly_uncertainty,
-            )
-        else:
-            # modo "mais provável": stake fixa sugerida (1,5% da banca)
-            stake = flat_stake(s.bankroll, s.stake_cap_pct, fraction=0.5)
-
-    analysis["n_eff"] = round(n_eff, 1)
-    return {**fx, "analysis": analysis, "odds": odds, "odds_meta": odds_meta,
-            "best": best, "stake": stake}
-
-
-@app.get("/api/day")
-async def day_analysis(day: str | None = None):
+@app.get("/api/radar")
+async def radar(ccy: str | None = None):
+    """Leitura de volatilidade do universo configurado."""
     s = load_settings()
-    day = day or str(date.today())
-    try:
-        fixtures = await _load_fixtures(s, day)
-    except provider.ProviderError as e:
-        raise HTTPException(502, str(e))
-
-    # Dia sem jogos nas ligas monitoradas (ex.: segunda-feira sem rodada) não é
-    # defeito — mas precisamos distinguir isso de uma falha. A contagem dos dias
-    # vizinhos já veio na MESMA resposta do provedor fd (custo zero de cota) e
-    # deixa o painel mostrar quando os próximos jogos acontecem. O diagnóstico
-    # (quantos jogos a API devolveu em cada etapa do filtro) separa "dia sem
-    # rodada" de "a API parou de entregar" — a diferença entre esperar e agir.
-    day_counts: dict = {}
-    fixtures_debug: dict = {}
-    fallback_info: dict = {}
-    actual_provider = s.provider
-    if s.provider == "fd":
-        fixtures_debug = provider.fd_day_debug(day)
-        if not fixtures:
-            day_counts = provider.fd_day_counts(day)
-    # info de qual provedor foi realmente usado (pode ser fallback)
-    try:
-        actual_provider = db.cache_get(f"fallback:used:{day}") or s.provider
-        fallback_info = db.cache_get(f"fallback:info:{day}") or {}
-    except Exception:
-        pass
-
-    with_odds = actual_provider in ("af", "demo")
-    # limitar concorrência para respeitar rate limits
-    sem = asyncio.Semaphore(2 if s.provider == "fd" else 5)
-
-    # Fase 1: baixar o histórico dos times de todos os jogos do dia.
-    async def fetch(fx):
-        async with sem:
-            hg, ag, err = await _team_games_for(s, fx, day)
-            return fx, hg, ag, err
-
-    # return_exceptions=True: uma falha isolada vira erro DAQUELE jogo e o
-    # restante do dia é analisado normalmente (antes uma exceção qualquer em
-    # um time derrubava a resposta inteira — 500 sem nenhuma análise).
-    fetched = await asyncio.gather(*[fetch(fx) for fx in fixtures], return_exceptions=True)
-
-    # Médias de gols e de xG por liga (mando/visitante) a partir do histórico
-    # do dia, com shrinkage para as médias globais quando a amostra é pequena.
-    pool: dict[str, list] = {}
-    errors: list = []
-    ready: list = []
-    for fx, res in zip(fixtures, fetched):
-        if isinstance(res, BaseException):
-            errors.append({**fx, "error": f"{type(res).__name__}: {res}"})
-            continue
-        _fx, hg, ag, err = res
-        if err or hg is None or ag is None:
-            errors.append({**fx, "error": err or "histórico indisponível"})
-            continue
-        pool.setdefault(fx["league"], [])
-        pool[fx["league"]].extend(hg)
-        pool[fx["league"]].extend(ag)
-        ready.append((fx, hg, ag))
-    priors = {lg: league_priors(games) for lg, games in pool.items()}
-    xg_priors = {lg: league_xg_priors(games) for lg, games in pool.items()}
-
-    # Fase 2: analisar cada jogo (odds, calibração, mistura, melhor mercado).
-    async def finish(fx, hg, ag):
-        async with sem:
-            home_avg, away_avg = priors[fx["league"]]
-            xh, xa_ = xg_priors[fx["league"]]
-            return await _analyze_fixture(s, fx, hg, ag, home_avg, away_avg, xh, xa_, with_odds)
-
-    results = await asyncio.gather(
-        *[finish(fx, hg, ag) for fx, hg, ag in ready], return_exceptions=True)
-    analyzed = []
-    for (fx, _hg, _ag), res in zip(ready, results):
-        if isinstance(res, BaseException):
-            errors.append({**fx, "error": f"Falha na análise: {type(res).__name__}: {res}"})
-        else:
-            analyzed.append(res)
-
-    # ranking do dia: score = prob*confiança (+EV quando há odds)
-    ranked = sorted(
-        (r for r in analyzed if r.get("best")),
-        key=lambda r: -(r["best"]["score"] * r["analysis"]["confidence"]),
-    )
-
-    best_single = None
-    for r in ranked:
-        b = r["best"]
-        if s.pick_mode == "ev" and b["ev"] is not None and b["ev"] * 100 < s.min_ev:
-            continue
-        best_single = r
-        break
-
-    # múltipla do dia: equilíbrio acerto × odd até a odd-alvo (v2.3)
-    multiple = build_multiple(analyzed, s)
-
-    # v2.3: NADA é gravado automaticamente aqui. Nem bilhete-sombra, nem
-    # histórico de jogos: registro é decisão do usuário (aba Bilhetes), e o
-    # disco do Render free só vê cache temporário com expiração.
-    feed = {}
-    if s.use_fd_odds and s.provider in ("fd", "af"):
+    targets = [ccy.upper()] if ccy else _ccys(s)
+    targets = [t for t in targets if t in provider.CURRENCIES] or ["BTC"]
+    out, errors = [], {}
+    for t in targets:
         try:
-            feed = odds_fd.feed_status(await odds_fd.get_events())
-        except Exception:
-            feed = {"available": False}
-
+            out.append(await _read(t, s))
+        except provider.ProviderError as e:
+            errors[t] = str(e)
+        except Exception as e:
+            errors[t] = f"{type(e).__name__}: {e}"
     return {
-        "day": day,
-        "provider": actual_provider,
-        "requested_provider": s.provider,
-        "fallback": fallback_info,
-        "version": VERSION,
-        "pick_mode": s.pick_mode,
-        "multiple_min_grade": s.multiple_min_grade,
-        "fixtures": analyzed,
+        "as_of": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "settings": {"bankroll": s.bankroll, "target_dte": s.target_dte,
+                     "defined_risk_only": s.defined_risk_only,
+                     "model_weight": s.model_weight},
+        "reads": out,
         "errors": errors,
-        "day_counts": day_counts,
-        "fixtures_debug": fixtures_debug,
-        "best_single": best_single["id"] if best_single else None,
-        "multiple": multiple,
-        "bankroll": s.bankroll,
-        "odds_feed": feed,
+        "etapa": 0,
+        "aviso": ("Etapa 0: leitura de volatilidade validada contra dados reais. "
+                  "Recomendação de estrutura, sizing por estresse e checklist A/B/C "
+                  "vêm nas Etapas 1-4. Nada aqui é recomendação de investimento."),
     }
 
 
-# ------------------------------------------------------------------ bilhetes
-class BetIn(BaseModel):
-    match_date: str
-    label: str
-    market: str
-    selection: str
-    odd: float
-    stake: float
-    prob: float | None = None
-    is_multiple: bool = False
-    legs: list | None = None
+@app.get("/api/surface")
+async def surface(ccy: str = "BTC", expiry: str | None = None, liquid_only: bool = True):
+    """Superfície crua: toda a cadeia ou um vencimento. Para conferir na corretora."""
+    s = load_settings()
+    ccy = ccy.upper() if ccy.upper() in provider.CURRENCIES else "BTC"
+    chain, src, dbg = await _chain(ccy, s)
+    rows = chain
+    if expiry:
+        rows = [o for o in rows if o["expiry"] == expiry]
+    if liquid_only:
+        rows = [o for o in rows if o["liquid"]] or rows
+    return {"ccy": ccy, "source": src, "debug": dbg, "n": len(rows),
+            "expiries": sorted({o["expiry"] for o in chain}),
+            "options": rows[:600]}
 
 
-@app.post("/api/bets")
-def add_bet(b: BetIn):
-    ev = round((b.prob or 0) * b.odd - 1, 4) if b.prob else None
-    with db.conn() as c:
-        c.execute(
-            "INSERT INTO bets(created_at, match_date, label, market, selection, odd, stake, prob, ev, is_multiple, legs) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                dt.datetime.now().isoformat(timespec="seconds"),
-                b.match_date, b.label, b.market, b.selection,
-                b.odd, b.stake, b.prob, ev,
-                1 if b.is_multiple else 0,
-                json.dumps(b.legs) if b.legs else None,
-            ),
-        )
-    return {"ok": True}
+@app.get("/api/history")
+async def history(ccy: str = "BTC", days: int = 180):
+    """Séries para gráfico: DVOL (IV) × RV realizada × preço."""
+    s = load_settings()
+    ccy = ccy.upper() if ccy.upper() in provider.CURRENCIES else "BTC"
+    candles, c_src, _ = await _candles(ccy, s)
+    dvol, d_src, _ = await _dvol(ccy, s)
+    days = max(20, min(days, s.candle_days))
+    cut = candles[-days:]
+    rv_series = []
+    for i in range(30, len(candles) + 1):
+        r = volread.realized_vol(candles[max(0, i - 90):i])
+        if r.get("ok"):
+            rv_series.append({"ts": candles[i - 1]["ts"], "rv30": r["rv"]})
+    return {
+        "ccy": ccy, "days": days,
+        "sources": {"candles": c_src, "dvol": d_src},
+        "candles": cut,
+        "dvol": [d for d in dvol if d["ts"] >= cut[0]["ts"]] if cut else dvol,
+        "rv_series": rv_series[-days:],
+    }
+
+
+# ------------------------------------------------------------------ diário de trades
+class TradeIn(BaseModel):
+    ccy: str = "BTC"
+    structure: str
+    direction: str = "short_vol"
+    legs: list[dict] = []
+    entry_iv: float | None = None
+    premium: float | None = None
+    notional: float | None = None
+    contracts: float | None = None
+    vega: float | None = None
+    delta: float | None = None
+    max_loss_stress: float | None = None
+    prob_edge: float | None = None
+    ev: float | None = None
+    grade: str | None = None
+    check_score: float | None = None
+    expiry: str | None = None
+    opened_at: str | None = None
+    notes: str = ""
+
+
+@app.post("/api/trades")
+def add_trade(t: TradeIn):
+    s = load_settings()
+    d = t.model_dump()
+    d["ccy"] = d["ccy"].upper()
+    if d["ccy"] not in provider.CURRENCIES:
+        raise HTTPException(400, f"moeda fora do radar (só {', '.join(provider.CURRENCIES)})")
+    if d.get("bankroll_at_entry") is None:
+        d["bankroll_at_entry"] = s.bankroll
+    if d.get("stake_pct") is None and d.get("notional") and s.bankroll:
+        d["stake_pct"] = round(abs(d["notional"]) / s.bankroll * 100, 3)
+    tid = db.add_trade(d)
+    return {"ok": True, "id": tid, "trade": db.get_trade(tid)}
 
 
 class SettleIn(BaseModel):
-    status: str  # won | lost | void
+    status: str = "closed"
+    pnl: float = 0.0
+    notes: str | None = None
 
 
-@app.post("/api/bets/{bet_id}/settle")
-def settle_bet(bet_id: int, body: SettleIn):
-    if body.status not in ("won", "lost", "void", "open"):
+@app.post("/api/trades/{trade_id}/settle")
+def settle_trade(trade_id: int, body: SettleIn):
+    t = db.get_trade(trade_id)
+    if not t:
+        raise HTTPException(404, "trade não encontrado")
+    if body.status not in ("open", "closed", "expired", "cancelled"):
         raise HTTPException(400, "status inválido")
-    with db.conn() as c:
-        row = c.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "aposta não encontrada")
-        old_profit = row["profit"] or 0
-        if body.status == "won":
-            profit = round(row["stake"] * (row["odd"] - 1), 2)
-        elif body.status == "lost":
-            profit = -row["stake"]
-        else:
-            profit = 0.0
-        c.execute("UPDATE bets SET status=?, profit=? WHERE id=?", (body.status, profit, bet_id))
-    # atualizar banca (bilhetes-sombra não mexem na banca: são auditoria)
-    if not row["shadow"]:
-        s = load_settings()
-        delta = profit - (old_profit if row["status"] != "open" else 0)
-        data = s.model_dump()
-        data["bankroll"] = round(data["bankroll"] + delta, 2)
-        db.set_setting("settings", json.dumps(data))
-        return {"ok": True, "profit": profit, "bankroll": data["bankroll"]}
-    return {"ok": True, "profit": profit}
+    fields = {"status": body.status, "pnl": body.pnl}
+    if body.notes is not None:
+        fields["notes"] = body.notes
+    db.update_trade(trade_id, fields)
+    return {"ok": True, "trade": db.get_trade(trade_id)}
 
 
 class ClosingIn(BaseModel):
-    closing_odd: float
+    closing_iv: float
 
 
-@app.post("/api/bets/{bet_id}/closing")
-def set_closing(bet_id: int, body: ClosingIn):
-    """Registra a odd de FECHAMENTO e calcula o CLV.
+@app.post("/api/trades/{trade_id}/closing-iv")
+def set_closing_iv(trade_id: int, body: ClosingIn):
+    """CVL — o análogo exato do CLV do FutAnalytics.
 
-    CLV = (odd_pegada / odd_fechamento - 1). Consistentemente positivo em
-    300+ apostas é o melhor indício de edge real antes do lucro aparecer.
+    Para quem VENDE vol, CVL positivo significa que a IV caiu entre a entrada e
+    o fechamento: você vendeu mais caro do que o mercado passou a precificar.
+    É o melhor preditor de edge de longo prazo disponível — melhor que o P&L do
+    trade individual, que depende de um caminho de preço que ninguém controla.
     """
-    if body.closing_odd <= 1.0:
-        raise HTTPException(400, "odd de fechamento deve ser > 1.0")
-    with db.conn() as c:
-        row = c.execute("SELECT odd FROM bets WHERE id=?", (bet_id,)).fetchone()
-        if not row:
-            raise HTTPException(404, "aposta não encontrada")
-        clv = round(100 * (row["odd"] / body.closing_odd - 1), 2)
-        c.execute("UPDATE bets SET closing_odd=?, clv=? WHERE id=?",
-                  (body.closing_odd, clv, bet_id))
-    return {"ok": True, "clv": clv}
+    t = db.get_trade(trade_id)
+    if not t:
+        raise HTTPException(404, "trade não encontrado")
+    entry = t.get("entry_iv")
+    cvl = None
+    if entry:
+        sign = -1.0 if (t.get("direction") or "").startswith("long") else 1.0
+        cvl = round(sign * (entry - body.closing_iv), 3)
+    db.update_trade(trade_id, {"closing_iv": body.closing_iv, "cvl": cvl})
+    return {"ok": True, "cvl": cvl, "trade": db.get_trade(trade_id)}
 
 
-@app.delete("/api/bets/{bet_id}")
-def delete_bet(bet_id: int):
-    with db.conn() as c:
-        c.execute("DELETE FROM bets WHERE id=?", (bet_id,))
+@app.get("/api/trades")
+def list_trades(status: str | None = None):
+    return {"trades": db.list_trades(status), "stats": db.stats()}
+
+
+@app.delete("/api/trades/{trade_id}")
+def delete_trade(trade_id: int):
+    ok = db.delete_trade(trade_id)
+    if not ok:
+        raise HTTPException(404, "trade não encontrado")
     return {"ok": True}
 
 
-@app.get("/api/bets")
-def list_bets():
-    with db.conn() as c:
-        rows = [dict(r) for r in c.execute("SELECT * FROM bets ORDER BY id DESC").fetchall()]
-    for r in rows:
-        if r.get("legs"):
-            r["legs"] = json.loads(r["legs"])
-    settled = [r for r in rows if r["status"] in ("won", "lost")]
-    staked = sum(r["stake"] for r in settled if not r["shadow"])
-    profit = sum(r["profit"] for r in settled if not r["shadow"])
-    wins = sum(1 for r in settled if r["status"] == "won")
-    shadow = [r for r in rows if r["shadow"]]
-    clvs = [r["clv"] for r in rows if r["clv"] is not None]
-    stats = {
-        "total": len(rows),
-        "open": sum(1 for r in rows if r["status"] == "open"),
-        "settled": len(settled),
-        "wins": wins,
-        "hit_rate": round(100 * wins / len(settled), 1) if settled else None,
-        "staked": round(staked, 2),
-        "profit": round(profit, 2),
-        "roi": round(100 * profit / staked, 2) if staked else None,
-        "shadow_count": len(shadow),
-        "shadow_settled": sum(1 for r in shadow if r["status"] in ("won", "lost")),
-        "clv_avg": round(sum(clvs) / len(clvs), 2) if clvs else None,
-        "clv_beat_pct": round(100 * sum(1 for c in clvs if c > 0) / len(clvs), 1) if clvs else None,
-        "clv_n": len(clvs),
+@app.get("/api/portfolio")
+def portfolio():
+    """Posições abertas agregadas. Etapa 0: agregação simples.
+
+    Na Etapa 4 entra aqui a correlação MEDIDA via cross-section ridge — hoje a
+    agregação é aritmética, o que SUPERESTIMA a diversificação. Está marcado de
+    propósito: melhor avisar que o número é otimista do que fingir precisão.
+    """
+    open_trades = db.list_trades("open")
+    s = load_settings()
+    vega = sum(abs(t.get("vega") or 0) for t in open_trades)
+    notional = sum(abs(t.get("notional") or 0) for t in open_trades)
+    stress = sum(abs(t.get("max_loss_stress") or 0) for t in open_trades)
+    per_ccy: dict[str, int] = {}
+    for t in open_trades:
+        per_ccy[t["ccy"]] = per_ccy.get(t["ccy"], 0) + 1
+    return {
+        "open_positions": len(open_trades),
+        "max_positions": s.max_positions,
+        "vega_total": round(vega, 4),
+        "vega_pct_bankroll": round(vega / s.bankroll * 100, 3) if s.bankroll else None,
+        "vega_teto_pct": s.max_vega_pct,
+        "vega_acima_do_teto": bool(s.bankroll and vega / s.bankroll * 100 > s.max_vega_pct),
+        "notional_total": round(notional, 2),
+        "stress_loss_total": round(stress, 2),
+        "stress_pct_bankroll": round(stress / s.bankroll * 100, 2) if s.bankroll else None,
+        "per_ccy": per_ccy,
+        "aviso": ("agregação aritmética: sem correlação medida ainda (Etapa 4). "
+                  "BTC e ETH compartilham fator de vol comum — tratar como "
+                  "NÃO diversificado até o cross-section entrar."),
     }
-    return {"bets": rows, "stats": stats}
+
+
+# ------------------------------------------------------------------ backup
+@app.get("/api/backup")
+def export_backup():
+    return db.export_all()
+
+
+@app.post("/api/backup")
+def import_backup(payload: dict):
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "payload inválido")
+    return {"ok": True, **db.import_all(payload)}
 
 
 @app.get("/api/labels")
 def labels():
-    return MARKET_LABELS
+    return {
+        "currencies": list(provider.CURRENCIES),
+        "providers": provider.PROVIDER_LABELS,
+        "structures_defined_risk": [
+            "iron_condor", "put_spread", "call_spread", "calendar_spread",
+            "diagonal_spread", "butterfly",
+        ],
+        "structures_naked": ["short_strangle", "short_straddle", "short_put", "short_call"],
+        "directions": ["short_vol", "long_vol", "neutral_carry", "skew"],
+        "grades": ["A", "B", "C"],
+        "vrp_bands": [
+            {"band": "muito rico", "min": 6.0, "action": "tamanho cheio"},
+            {"band": "saudável", "min": 3.0, "action": "tamanho padrão"},
+            {"band": "magro", "min": 1.0, "action": "reduz, risco definido"},
+            {"band": "marginal", "min": 0.0, "action": "mínimo ou fique de fora"},
+            {"band": "NEGATIVO", "min": None, "action": "não venda prêmio"},
+        ],
+    }
 
 
-# ------------------------------------------------------------------ frontend
-app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+@app.get("/api/health")
+def health():
+    return {"ok": True, "app": APP_NAME, "version": VERSION,
+            "api_calls_today": db.api_usage_today(str(dt.date.today()))}
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
 def index():
-    # no-cache: o index é revalidado (ETag) a cada visita — depois de um deploy
-    # o celular pega o HTML novo na primeira abertura, sem cache velho.
-    # HEAD: a plataforma (proxy do Render) sonda "HEAD /" logo após cada
-    # subida de instância; o FastAPI atual responde 405 para HEAD em rotas
-    # criadas só com @app.get — aceitar HEAD (mesma resposta, sem corpo)
-    # elimina o "405 Method Not Allowed" dos logs.
-    return FileResponse(str(STATIC / "index.html"), headers={"Cache-Control": "no-cache"})
+    f = STATIC / "index.html"
+    if f.exists():
+        return FileResponse(f)
+    return JSONResponse({"app": APP_NAME, "version": VERSION,
+                         "hint": "static/index.html ausente"})

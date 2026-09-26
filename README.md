@@ -1,94 +1,260 @@
-# FutAnalytics v2.4.4 "Segredos Pro — Render Free"
+# SigmaDesk — Etapa 0
 
-> **v2.4.4 (23/set/2026) — "3 segredos dos grandes players que cabem no free"**: (1) **Fadiga avançada**: conta jogos nos últimos 7/14 dias + descanso curto (3j/7d = -8% λ, 2j/7d = -5%) — dado já existente em TeamSample, zero chamada extra. Mostra no card `🔋 Fadiga: casa 2j/7d...` + pill vermelha + item no checklist "Densidade de jogos". (2) **Regressão de finalização xG vs Gols**: time que fez +3.5 gols acima do xG nos últimos 10 vai regredir — reduz λ 6%, underperform aumenta 6%. Usa xG já baixado do Understat. Mostra `📊 xG vs Gols: +3.2 atk (overperform ataque)` + pill amarela + item "Regressão xG vs gols". (3) **Correlação oculta da múltipla**: 2 overs mesma liga = -8% prob combinada, 3+ mesma liga = -15% — evita múltipla com 3 overs PL no mesmo horário (chuva correlaciona). Mostra `ajustada 62% → correlação -8%`. Tudo em `model.py` apenas, sem nova dep, mesma RAM, seguro Render free.
+> **Linhagem:** FutAnalytics v2.4.4 → **SigmaDesk**. Mesma arquitetura preditiva,
+> mesmo repositório, mesmo histórico de git — mercado trocado.
 >
-> **v2.4.3 (23/set/2026) — "remove secundárias"**: Experiência ruim analisando jogos secundários alternativos (MLS, Liga MX, Argentine, Nations, amistosos, Championship) adicionados na v2.4.2. Removidas do app: ESPN agora busca apenas **principais** (Brasileirão A, PL, La Liga, Serie A, Bundesliga, Ligue 1, Champions, Copa do Brasil, Libertadores). Sem tocar no motor/IA (model.py/joint.py/calibration.py intactos), sem nova dependência, seguro Render free. Durante Data FIFA o app mostra dia vazio com chips dos próximos dias em vez de forçar análise ruim.
+> **Por que a troca:** apostas esportivas foram proibidas no Brasil (MP assinada
+> em 25/set/2026; encerramento em 06/out/2026). O motor não foi descartado: a
+> matemática que lia λ de gols, xG, devig e CLV lê σ implícita, volatilidade
+> realizada, variância model-free e CVL. Trading de criptoativos é legal no Brasil
+> (Lei 14.478/2022) e não foi afetado pela proibição.
 >
-> **v2.4.1 (23/set/2026) — "demo não invade dia vazio"**: corrige bug que fazia cair no demo com jogos fake tipo "Arsenal x Fortaleza" em dia genuinamente sem rodada. Agora distingue falha vs vazio: `fd` retorna [] com `day_counts` e `debug` = dia sem rodada (mostra chips próximos dias), só vai para demo quando TODAS as fontes reais falham por erro de rede/token, com aviso explícito.
->
-> **v2.4.0 (22/set/2026) — "fallback automático"**: (1) **Novo: OpenLigaDB + ESPN como fallback grátis sem chave** — se a `football-data.org` falhar, devolver lista vazia ou estourar cota, o app tenta automaticamente OpenLigaDB (Bundesliga, Champions) e depois ESPN (Brasileirão, Libertadores, PL, La Liga etc) antes de cair no demo. Você nunca fica sem jogos por instabilidade de uma API só; (2) diagnóstico de fallback no painel (mostra `pediu fd → usou openliga`); (3) botões de teste para OpenLigaDB e ESPN em Configurações.
->
-> **v2.3.5 (22/set/2026) — "sumiram os jogos futuros"**: (1) a football-data.org pode devolver **HTTP 200 com lista vazia** em certos problemas de plano/permissão — sem erro — e o painel mostrava "dia sem jogos" em todos os dias futuros, enquanto os passados pareciam vivos só porque ficam em cache por 7 dias. Agora o app **detecta a resposta vazia impossível** (9 dias × ~10 ligas = 0 jogos) e cai para a **rota por competição**, que devolve erro explícito quando é permissão — a causa aparece na tela em vez de silêncio; (2) **diagnóstico de etapas** na tela vazia (quantos jogos a API devolveu na janela, quantos nas ligas monitoradas) + versão do app no painel; (3) janela corrigida para **9 dias reais** (o `dateTo` da API v4 é exclusivo); (4) jogos futuros com horário `00:00:00Z` (placeholder de liga que ainda não fechou a hora) não vão mais para a véspera por causa do fuso; (5) erro definitivo de token/plano aparece na hora, sem 10 retentativas fingindo "aquecimento".
+> **Etapa 0 (26/set/2026) — camada de dados validada contra dado real.** Nada de
+> motor de recomendação ainda. O que existe: leitura de volatilidade completa,
+> diário de trades com CVL, painel e **duas suítes de validação que rodam sobre
+> dados capturados das APIs de verdade**. Ver "Validação" abaixo, incluindo os 5 bugs
+> que só dado real pegou.
 
-Plataforma de análise diária de jogos de futebol focada em mercados de gols (Over/Under, BTTS e totais por time), com **odds reais grátis**, seleção por **equilíbrio acerto × odd**, **verificação do trader** (checklist criterioso por jogo) e **zero gravação automática**.
+Painel de leitura de **volatilidade de criptoativos** (opções de BTC e ETH na
+Deribit), focado no prêmio de risco de volatilidade (VRP), em estruturas de
+**risco definido** e no registro disciplinado de cada operação com **CVL** —
+o análogo exato do CLV que o FutAnalytics usava contra a odd de fechamento.
 
-## O que a v2.3 acrescenta — e por quê
+## O que a Etapa 0 entrega — e o que ela NÃO entrega
 
-1. **Odds reais sem pagar nada** (`app/odds_fd.py`). Em 2026 não existe mais API de odds de futebol realmente gratuita (The Odds API removeu soccer do plano free; API-Football free só libera temporadas antigas). O que continua grátis, sem chave e sem cota, é o arquivo público do **football-data.co.uk** com as odds das próximas rodadas das ligas europeias: **1X2 e Over/Under 2.5 da Bet365 e da Pinnacle** (a casa mais *sharp* do mundo). O app baixa o arquivo ~2x/dia (150 KB, cacheado 12h), casa os jogos por data + nome e mostra a melhor odd real por mercado com selo **real**.
-2. **Linhas derivadas do consenso** (selo **derivada**). Over 1.5, BTTS e totais por time não existem no arquivo gratuito. O app faz o que as casas fazem: **inversão Poisson** — encontra os λ implícitos no 1X2 + O2.5 do mercado (devig) e projeta as demais linhas na matriz Dixon-Coles do motor, com margem padrão. Estimativa boa, não é preço de casa — confira na sua antes de registrar. Jogos fora das ligas cobertas (Brasileirão, Champions) seguem com a **odd justa do modelo**, sem disfarce.
-3. **Seleção por equilíbrio acerto × odd** (modo padrão `balanced`). Perna de 92% @1.04 estraga múltipla: risco inteiro por quase nada. O score `prob^1.25 · (1−1/odd)^0.6` mantém a probabilidade no comando e deixa o preço decidir o desempate; perna abaixo de ~1.12 só entra sem alternativa. Modos "mais provável" e "valor esperado" continuam disponíveis em Configurações.
-4. **Múltipla com odd-alvo e régua de selo** (padrão 2.8 e selo mínimo B, configuráveis): pernas adicionadas da mais segura para a menos segura **só até atingir o alvo** — perna além do alvo derruba sua taxa de acerto sem melhorar o retorno — e **perna com selo C da verificação nunca entra**; se nenhum ângulo do jogo passa na régua, o jogo fica de fora (e haverá dias sem múltipla, deliberadamente). Cada perna mostra de onde veio o preço (real/derivada/justa) e o selo.
-5. **Verificação do trader A/B/C**: antes de cada pick, checklist objetivo — amostra, insumo (modelo conjunto/xG/gols), concordância modelo×mercado (discordar muito do mercado é alerta, não convite), descanso dos times, tendência recente alinhada à perna, H2H e perfil da liga. Nota 0–10 no card, calculada **para cada candidato a perna** (a múltipla filtra por selo, padrão: nunca C). Não é promessa de green: é a soma das evidências. A conferência de desfalques/escalações continua sendo humana — a sua.
-6. **Nada é gravado sozinho** (pedido explícito do usuário do Render free): o modo sombra deixou de existir. Bilhetes, resultados e CLV só entram quando você clica em registrar. O único dado não-volátil escrito automaticamente é o **cache temporário das APIs** (expira em horas e é limpo na inicialização) — sem ele as cotas gratuitas estourariam em minutos e o app pararia.
+**Entrega:**
+
+1. **Camada de dados com cadeia de fallback** (`app/provider.py`).
+   `deribit → coinbase → kraken → demo`. A Deribit resolve IV, DVOL, OHLCV e
+   funding numa API pública **sem autenticação**. A Coinbase entra para histórico
+   longo de velas (BTC-USD desde 2015). O modo demo nunca deixa o painel vazio —
+   e é sempre rotulado como demo, em cada camada, nunca confundido com real.
+2. **Leitura de volatilidade** (`app/volread.py`). RV em dois horizontes com EWMA
+   (meia-vida 58d/11d, peso curto 25% — os `DECAY_LONG`/`DECAY_SHORT`/`SHORT_WEIGHT`
+   herdados intactos do `model.py` do FutAnalytics) + estimadores de amplitude
+   Parkinson/Garman-Klass/Yang-Zhang (5–8× mais eficientes que close-to-close —
+   é o papel que o xG tinha: um estimador melhor do mesmo fenômeno) + separação
+   de salto por bipower variation (o papel do ρ de Dixon-Coles). Superfície de IV:
+   ATM por vencimento, estrutura a termo, forward variance, variância model-free
+   pela fórmula do VIX, skew 25-delta, put/call por open interest. Previsão
+   prospectiva por Ornstein-Uhlenbeck. E o **VRP** = IV − RV prevista, com banda
+   e ação.
+3. **Diário de trades com CVL** (`app/db.py`, `/api/trades`). Risco definido por
+   padrão (`defined_risk_only: true`, `naked_short_enabled: false`) — venda de
+   prêmio sem proteção fica desligada até existir histórico de CVL que a justifique.
+4. **Painel** (`static/index.html`): radar BTC/ETH, browser de superfície, diário,
+   diagnóstico de provedores, configurações e aba de metodologia.
+
+**Não entrega ainda (está nas Etapas 1–4, nesta ordem):** motor de estruturas com
+payoff e gregas, sizing por perda em estresse, checklist A/B/C de 11 itens,
+backtest sobre histórico real, cross-section de vol sistemática vs. idiossincrática,
+calibração PAVA aplicada à previsão de RV. O `calibration.py` do FutAnalytics foi
+**mantido sem alteração** porque a regressão isotônica PAVA é reaproveitável
+~100% — muda só o rótulo do eixo.
 
 ## Um parágrafo de expectativa honesta
 
-O backtest em ~5.200 jogos reais (`backtest_report.md`) mostra o que todo trader de 15 anos sabe: o mercado de odds é eficiente, modelo nenhum vence o consenso no agregado, e lucro vem de **disciplina, preço bom e filtragem** — não de "IA que adivinha". Este app existe para te dar as três coisas de graça: probabilidades calibradas e honestas, o melhor preço disponível sem pagar API, e um filtro criterioso que te tira das apostas ruins. Quem transforma isso em dinheiro consistente é você, com gestão de banca e registro completo. Promessa de acerto garantido seria mentira — e mentira não entra neste código.
+O VRP existe e é documentado há décadas: em 30 anos de ações, a implícita ficou
+acima da realizada em ~70–75% dos dias, com média de 2–4 pontos. Em cripto o
+prêmio é maior e mais persistente, porque o comprador típico de opção paga por
+convexidade sem precificá-la. **Isso não é promessa de lucro.** É uma assimetria
+estatística que some exatamente quando você mais precisa dela — em abril de 2025 o
+VRP de ações foi a −17 pontos num único mês, e vender prêmio nesse regime quebra
+conta. Três coisas separam isso de perder dinheiro: preço de entrada (só vender
+quando a banda diz que está rico), risco definido (asas compradas sempre, para o
+pior caso ser um número conhecido e não uma surpresa), e registro completo com CVL
+(para você saber se o seu edge é real ou se foi sorte num trimestre de vol baixa).
+E note o que a leitura real de 26/set/2026 disse: **VRP negativo, −3,8 pontos** —
+IV de 35,4% contra RV realizada de 39,2%. O app respondeu "não venda prêmio".
+Um motor que nunca diz não não é um motor, é um gerador de operações. Promessa de
+retorno garantido seria mentira, e mentira não entra neste código.
 
 ## Rodar
 
 ```bash
-pip install fastapi "uvicorn[standard]" httpx
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Abra http://localhost:8000
 
-## Backtesting (a ferramenta que valida tudo)
+Quatro dependências, **as mesmas do FutAnalytics** — a migração não acrescentou
+nenhuma: `fastapi`, `uvicorn`, `httpx`, `pydantic`. Toda a matemática é Python
+puro da stdlib. Sem numpy, pandas, scipy ou sklearn.
+
+## Validação
+
+Duas suítes, ambas offline e determinísticas:
 
 ```bash
-python3 -m app.backtest --train 2324 2425 --test 2526 --fit-calibration --report backtest_report.md
+.venv/bin/python -m tools.validate_etapa0   # 81 verificações: MATEMÁTICA sobre dado real
+.venv/bin/python -m tools.smoke_api         # 133 verificações: CONTRATO HTTP, banco descartável
 ```
 
-Mede Brier/LogLoss vs. mercado, tabela de calibração, teste de alfa, ROI das estratégias (flat e Kelly) e CLV contra a odd de fechamento. Cache em `data_cache/`.
+`tools.validate_etapa0` roda sobre `app/fixtures_real.json`: 30 velas diárias
+reais da Coinbase, 17 opções reais da Deribit e a série oficial de DVOL
+(jun–set/2026 + janela histórica de 2024), tudo capturado em 26/set/2026.
 
-## Fontes de dados (v2.4.4 só principais + segredos pro)
+```bash
+python -m tools.capture_fixtures            # recaptura os fixtures (rode FORA do sandbox)
+python -m tools.capture_fixtures --check    # compara com o existente e avisa sobre drift
+```
 
-| Provedor | Custo | Cobertura | Odds | Papel |
+### Os 5 bugs que só dado real pegou
+
+Nenhum destes apareceria em teste com dado sintético. É o argumento pela Etapa 0
+antes do motor:
+
+1. **Dia de vencimento sem zero à esquerda.** A Deribit emite `BTC-9OCT26`, não
+   `BTC-09OCT26`. O parser assumia 2 dígitos e perdia **silenciosamente** todo
+   vencimento de dia 1 a 9 — justamente os semanais, a parte mais líquida da
+   superfície. Corrigido lendo o código ancorado pela direita.
+2. **O demo validava a si mesmo.** `demo_chain` montava nomes com
+   `strftime('%d%b%y')`, que zero-pads o dia. Ou seja: o gerador produzia
+   `02OCT26` e o parser aceitava `02OCT26` — um par fechado que nunca encontraria
+   o nome real. Regra que ficou: **o modo demo emite a mesma convenião da
+   exchange**, senão ele não testa nada.
+3. **`hash(str)` é salgado por processo.** O "demo determinístico" usava
+   `hash(ccy) & 0xFFFF` como seed. Em CPython isso muda a cada processo, então o
+   demo gerava uma história **diferente a cada restart** — medido: o close de 30
+   dias atrás saía 78.673 num processo e 92.535 noutro. Quebra reprodutibilidade,
+   invalida cache e faz o painel mostrar números que mudaram sem o mercado mudar.
+   Só apareceu rodando a mesma função em dois processos.
+4. **`INSERT` de trades nasceu quebrado.** `sqlite3.OperationalError: 21 values
+   for 20 columns` — `created_at` era contado duas vezes (já entrava como literal
+   `datetime('now')` e ainda ganhava placeholder). Nenhum trade jamais foi
+   gravado; só apareceu quando o endpoint foi chamado de verdade.
+5. **Configuração de risco sem limite nenhum.** `POST /api/settings` gravava
+   `bankroll: -50`. Como `stake_pct = notional/bankroll×100`, o sizing do trade
+   seguinte saiu **−3108%**; com bankroll zero haveria divisão por zero no
+   portfólio. Agora valida com limites declarativos e é **all-or-nothing** com
+   422: perfil de risco é uma combinação (capital × teto de vega × Kelly × DTE),
+   então aplicar metade de um payload com erro criaria um perfil que você nunca
+   revisou.
+
+Corrigido de passagem: `demo_dvol` estava ancorado em DVOL 19,0 quando o índice
+oficial era **34,88** — o demo fingia um mercado 16 pontos mais barato que o real,
+e qualquer teste de VRP sobre ele mentiria. E o handler de settings tinha um
+`for ...: pass` no lugar da invalidação de cache: trocar o universo continuava
+servindo a superfície antiga até o TTL vencer.
+
+### O cross-check que dá confiança nos números
+
+Duas medições **independentes** de IV, no mesmo dia, concordando em 0,50 ponto:
+
+| Medição | Valor | Fonte |
+|---|---|---|
+| DVOL BTC oficial | 34,88% | índice da Deribit |
+| IV 30d interpolada | 35,38% | cadeia de opções real, interpolada em variância total |
+| Spot | 84.003,06 | Coinbase `BTC-USD` |
+| Spot (conferência) | 84.003,27 | Deribit `estimated_delivery_price` — Δ de 21 centavos |
+| RV 30d realizada | 39,18% | velas Coinbase, blend com estimadores de amplitude |
+| **VRP** | **−3,8 pts** | NEGATIVO → "não venda prêmio" |
+
+## Decisões de escopo (todas confirmadas com o usuário)
+
+| Decisão | Valor | Consequência no código |
+|---|---|---|
+| Mercado | volatilidade de cripto (opções BTC/ETH) | `provider.py`, `volread.py` |
+| Execução | Deribit, caminho completo com estruturas | Etapas 1–4 |
+| Legado | reescrita no lugar, git preservado | módulos de futebol removidos, `calibration.py` mantido |
+| Nome | **SigmaDesk** | — |
+| Capital de risco | configurável, padrão editável | `settings.bankroll` |
+| Perfil de risco | **só risco definido** no início | `defined_risk_only: true`, `naked_short_enabled: false` |
+| Instrumentos | **BTC + ETH apenas** | `provider.CURRENCIES`; `/api/trades` recusa SOL com 400 |
+| Ordem | **Etapa 0 primeiro** | este README |
+
+Venda de prêmio sem proteção (short straddle/strangle sem asas) permanece
+**desligada por padrão** até haver histórico de CVL acumulado que justifique
+ligá-la. É uma chave explícita nas configurações, não um ajuste fino.
+
+## Fontes de dados
+
+| Provedor | Custo | Auth | Fornece | Papel |
 |---|---|---|---|---|
-| Demonstração | nenhum | dados simulados | simuladas | Último recurso (sempre funciona) |
-| football-data.org | grátis (token) | Brasileirão A, Champions, top 5 Europa, Portugal, Holanda | não | **Principal** |
-| **OpenLigaDB** | grátis, **sem chave** | Bundesliga, Champions | não | **Fallback 1** automático, sem cota |
-| **ESPN** | grátis, **sem chave** | Brasileirão A, Copa do Brasil, Libertadores, PL, La Liga, Serie A, Bundesliga, Ligue 1 | não | **Fallback 2** automático, só principais |
-| **football-data.co.uk** | grátis, sem chave | ~22 ligas europeias (próximas rodadas) | **sim: B365 + Pinnacle** | Odds reais |
-| API-Football (api-sports.io) | pago p/ temporada atual | Série A/B, Copa do Brasil, Libertadores + Europa | sim | Alternativa paga |
-| Understat | grátis, sem chave | xG histórico: Premier, La Liga, Bundesliga, Serie A, Ligue 1 | — | xG |
+| **Deribit** | grátis | **nenhuma** (API pública) | cadeia de IV completa, DVOL, OHLCV, funding, forward | **Principal** |
+| **Coinbase Exchange** | grátis | nenhuma | OHLCV diário profundo (BTC-USD desde 2015) | **Fallback 1** |
+| **Kraken** | grátis | nenhuma | OHLCV | **Fallback 2** |
+| Demonstração | nenhum | — | superfície sintética ancorada em valor real | Último recurso (sempre funciona) |
+| ~~Binance~~ | — | — | — | **REMOVIDA**: geo-bloqueada no IP do Render free (EUA). Confirmado por teste: devolve "restricted location" |
 
-**Como funciona o fallback (v2.4):** `fd --falha/vazio--> openliga --falha--> espn --falha--> demo`. Se o principal falhar, o painel mostra `fallback automático: pediu fd → usou openliga`. Você nunca fica sem jogos.
+`get_book_summary_by_currency` devolve, **numa única chamada**, `mark_iv`,
+`open_interest`, `volume`, `bid_price`/`ask_price` e `underlying_price` de todas
+as opções de uma moeda. Orçamento medido: ~8 chamadas a cada 15 minutos, contra
+um pool de 50 mil créditos (500 créditos/chamada, refill de 10 mil/s). `get_instruments`
+custa 10 mil créditos — por isso entra no cache diário, não no ciclo de 15 minutos.
 
-**v2.4.3:** removidas ligas secundárias (MLS, Liga MX, Argentine, Nations, amistosos, Championship) — experiência de análise ruim, modelo não calibrado para elas. App foca só nas principais onde tem xG, calibração e histórico sólido.
-
-**v2.4.4 segredos pro (Render free):** (1) fadiga usa só `days_ago` já existente, (2) regressão xG usa `gf-xgf` já baixado, (3) correlação é pura lógica Python. Zero chamada extra, zero dep nova, mesma RAM 512MB.
-
-Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs.
-
-Chaves salvas localmente em SQLite e nunca saem da sua máquina além das chamadas às próprias APIs. Sem uso pago, todas as fontes do dia a cabo.
+**Restrições conhecidas, medidas:** `get_volatility_index_data` exige o parâmetro
+`currency` (com só `index_name` devolve erro −32602) e tem piso duro em
+2024-01-01. `get_historical_volatility` só devolve ~2–3 semanas de dados horários
+— não serve para histórico longo de RV. O formato de vela da Coinbase é
+`[time, LOW, HIGH, open, close, volume]`, com **LOW antes de HIGH** e resposta em
+ordem **descendente**; normalizar errado inverte a amplitude e corrompe todo
+estimador de range sem levantar erro.
 
 ## Metodologia (resumo)
 
-Modelo v2.4.4: dois horizontes de força (58d + 11d, peso forma 25%), xG Understat, **modelo conjunto por liga** (Poisson ridge ajustado por adversário), Dixon-Coles ρ=-0,09, **calibração isotônica**, blend mercado 25%, Kelly com incerteza + **3 segredos pro Render free**: (1) **fadiga avançada** (jogos 7/14d, rest curto, -5 a -8% λ), (2) **regressão xG vs gols** (overperform +3.5 gols vs xG = -6% λ, segredo Pinnacle), (3) **correlação de múltipla** (2 overs mesma liga -8%, 3+ -15% prob combinada). Na 25/26 real: **81,1% acerto por perna**; detalhes em `backtest_report.md`.
+O mapeamento completo de cada componente do motor de futebol para o seu
+equivalente em volatilidade está em `PLANO_SIGMADESK.md`. Os que já estão
+implementados:
+
+| FutAnalytics | SigmaDesk | Status |
+|---|---|---|
+| λ_home/λ_away (Poisson) | σ_forecast (EWMA 2 horizontes) | ✅ Etapa 0 |
+| xG (estimador melhor que gols) | Parkinson/GK/Yang-Zhang (melhor que close-to-close) | ✅ Etapa 0 |
+| ρ de Dixon-Coles (−0,09) | correção de salto por bipower variation | ✅ Etapa 0 |
+| devig (remove margem da casa) | variância model-free (fórmula VIX) + half-spread | ✅ Etapa 0 |
+| CLV vs odd de fechamento | **CVL** vs IV de fechamento | ✅ Etapa 0 |
+| regressão xG vs gols | reversão OU de vol | ✅ Etapa 0 |
+| fadiga (jogos 7/14d → λ×0,92) | densidade de eventos (FOMC/CPI/expiração → σ×1,12) | Etapa 1 |
+| calibração PAVA | PAVA sobre previsão de RV | mantido, aplica na Etapa 2 |
+| `kelly_stake(p, odd, bankroll)` | sizing por perda em estresse | Etapa 3 |
+| `build_multiple` (penalidade fixa −8/−15%) | `build_portfolio` com correlação **medida** | Etapa 4 — upgrade real |
+| checklist do trader (9 itens) | checklist de vol (11 itens) | Etapa 3 |
+
+Anualização em cripto usa **√365**, não √252 — o mercado não fecha no fim de
+semana. Errar isso subestima toda volatilidade anualizada em ~20%.
 
 ## Estrutura
 
 ```
 app/
-  main.py             # API FastAPI: painel, bilhetes, CLV, backup, configurações
-  model.py            # motor: forças, Poisson/Dixon-Coles, equilíbrio, checklist, múltipla
-  odds_fd.py          # odds reais grátis (football-data.co.uk) + inversão Poisson
-  calibration.py      # calibração isotônica (PAVA) por grupo de mercado
-  understat.py        # provedor de xG (grátis, sem chave, com cache)
-  joint.py            # modelo conjunto por liga (forças ajustadas por adversário)
-  backtest.py         # backtesting nativo + treino das curvas (offline, no seu PC)
-  provider.py         # football-data.org, API-Football, modo demo, cache
-  db.py               # SQLite: settings, cache (com limpeza de expirados), bilhetes
-  calibration_data.json  # curvas treinadas (gerada por app.backtest)
-static/
-  index.html          # frontend (painel, verificação do trader, bilhetes, metodologia)
+  provider.py       Deribit/Coinbase/Kraken/demo: fallback, pacing, diagnóstico
+  volread.py        RV, superfície de IV, forward variance, OU, VRP
+  db.py             SQLite: settings, cache com TTL, trades (com CVL), api_usage
+  calibration.py    PAVA isotônico — herdado INTACTO do FutAnalytics
+  fixtures_real.json  dados reais capturados em 26/set/2026 (validação offline)
+  main.py           FastAPI: 23 rotas
+static/index.html   painel
+tools/
+  validate_etapa0.py    81 verificações sobre dado real
+  smoke_api.py          133 verificações do contrato HTTP
+  capture_fixtures.py   recaptura os fixtures
+PLANO_SIGMADESK.md  plano de migração completo (770 linhas)
 ```
 
-## Render free: por que este app cabe (e continua cabendo)
+## Render free: por que este app cabe
 
-- **Sem dependências novas** (`fastapi`, `uvicorn`, `httpx`, `pydantic`): build e RAM iguais.
-- **Sem workers agendados, sem processos em segundo plano, sem banco separado**: um processo web, SQLite efêmero.
-- **Sem gravação automática de dados**: o disco só vê cache temporário com expiração (e limpeza na inicialização). Bilhetes são manuais; o backup/restauração cobre o disco efêmero do free.
-- **Uma única chamada externa extra** (o CSV de odds de 150 KB, 2x/dia): nada que arranhe os 750h/mês, a RAM de 512 MB ou a banda.
+- **512 MB de RAM:** sem numpy/pandas, o processo fica em ~60 MB.
+- **Sem worker em background:** todo refresh é sob demanda, com TTL de cache
+  (`chain` 15 min, `candles`/`dvol` 1 h). Nenhum processo separado.
+- **Sem dependência nova:** as mesmas quatro do FutAnalytics.
+- **SQLite efêmero:** o disco do Render free é volátil, então `db.conn()`
+  verifica e recria o schema a cada conexão (auto-reparo herdado). Persistência
+  real é `/api/backup` — exportar/importar JSON.
+- **Nenhuma gravação automática de dado de usuário:** o único dado não-volátil
+  escrito sozinho é cache temporário com TTL, purgado na inicialização. Trades
+  só entram quando você clica em registrar. Herdado do FutAnalytics porque era um
+  pedido explícito, e continua sendo a decisão certa.
+- **Health check em `/api/health`:** não toca em nenhuma API externa, então
+  responde 200 mesmo com Deribit e Coinbase fora do ar (o app cai no demo em vez
+  de morrer).
+
+## Aviso
+
+Ferramenta de análise e registro. **Não é recomendação de investimento.** Opções
+de criptoativos são instrumentos de risco elevado; estruturas de risco definido
+limitam a perda máxima a um valor conhecido, o que é diferente de não perder.
+Deribit não restringe residentes do Brasil, mas exige KYC para operar e os termos
+mudam — verifique você mesmo antes de abrir conta. Você é o único responsável
+pelas suas operações.

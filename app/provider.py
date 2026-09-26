@@ -1,996 +1,879 @@
-"""
-Camada de dados: busca jogos do dia e histórico recente dos times.
+"""Camada de dados do SigmaDesk — Etapa 0.
 
-Provedores suportados:
-- football-data.org (v4): tier gratuito cobre Brasileirão Série A, Premier League,
-  La Liga, Serie A, Bundesliga, Ligue 1, Champions League e mais. Limite 10 req/min.
-- API-Football (api-sports.io v3): tier gratuito 100 req/dia; cobre odds reais.
-- OpenLigaDB: grátis, sem chave, sem cota — fallback automático (Bundesliga + outras)
-- ESPN (não-oficial): grátis, sem chave, cobre Brasileirão, Libertadores, Champions
-- demo: dados simulados realistas para testar a plataforma sem chave.
+Herdeira direta de `provider.py` do FutAnalytics (mesma filosofia: provedor
+principal + fallbacks grátis sem chave + modo demo + pacing + cache). A cadeia
+esportiva era `fd -> openliga -> espn -> demo`; a financeira é
 
-Fallback automático (v2.4):
-  fd --(falha/vazio)--> openliga --(falha)--> espn --(falha)--> demo
-  Garante que o painel nunca fique vazio por instabilidade de uma API só.
+    deribit --falha--> coinbase --falha--> kraken --falha--> demo
 
-Tudo é cacheado em SQLite para economizar requisições.
+------------------------------------------------------------------------------
+O QUE A ETAPA 0 DESCOBRIU (validado contra as APIs reais em 26/set/2026)
+------------------------------------------------------------------------------
+1. `public/get_book_summary_by_currency?currency=BTC&kind=option` devolve a
+   CADEIA INTEIRA de opções com `mark_iv`, `bid_price`, `ask_price`,
+   `open_interest`, `volume`, `underlying_price` — tudo em UMA chamada pública
+   sem chave. É o análogo exato do `fixtures.csv` do football-data.co.uk que
+   sustentava as odds grátis. Resposta grande (~56 páginas de JSON p/ BTC).
+
+2. `public/get_volatility_index_data` exige **`currency`**, NÃO `index_name`.
+   Passar `index_name` devolve erro JSON-RPC -32602 `{"reason":"value
+   required","param":"currency"}`. (O plano original errava isso.)
+
+3. DVOL tem **piso duro em 2024-01-01**. Pedindo `start_timestamp` de 2019 o
+   primeiro ponto continua sendo 1704067200000 = 01/jan/2024. Portanto o
+   backtest de VRP no nível de índice vive em ~2,7 anos de diário. Raso, mas
+   real e grátis.
+
+4. **`api.binance.com` está geo-bloqueada**: devolve
+   `{"code":0,"msg":"Service unavailable from a restricted location according
+   to 'b. Eligibility'"}`. O Render free hospeda em Ohio/EUA — Binance como
+   fallback MORRERIA em produção sem aviso. Por isso a cadeia usa Coinbase
+   Exchange e Kraken, que responderam normalmente. Binance fica disponível
+   apenas como fonte opcional explícita (`provider="binance"`), nunca no
+   caminho automático.
+
+5. `get_tradingview_chart_data` da própria Deribit serve OHLCV diário desde
+   jan/2024 — mesmo provedor, zero risco geográfico novo.
+
+6. Cross-check de integridade: close BTC 25/set/2026 na Coinbase = 84.003,06;
+   `estimated_delivery_price` da Deribit = 84.003,27. Duas fontes
+   independentes concordam em 21 centavos.
+
+7. Formatos que MORDIAM se não fossem documentados aqui:
+   * Coinbase devolve `[time, LOW, HIGH, open, close, volume]` — LOW vem ANTES
+     de HIGH, ordem diferente da Binance. E vem em ordem DESCENDENTE.
+   * Deribit DVOL devolve `[ts, open, high, low, close]` ASCENDENTE, sem volume.
+   * `get_historical_volatility` devolve `[ts, valor]` e REPETE o primeiro ponto.
+   * Opções da Deribit são INVERSAS: `quote_currency == "BTC"` (preço em BTC,
+     não em USD). `mark_iv` vem em PORCENTAGEM (18.69, não 0.1869).
+   * `bid_price` pode ser `null` em strike ilíquido — é o caso real, não bug.
+     Isso é exatamente o que o item "liquidez da ponta" do checklist existe
+     para pegar.
+
+------------------------------------------------------------------------------
+ORÇAMENTO DE CHAMADAS (Render free)
+------------------------------------------------------------------------------
+Deribit pública não-autenticada é limitada POR IP, sistema de créditos:
+500 créditos/chamada padrão, pool 50.000, refill 10.000 créditos/s.
+Exceção cara: `public/get_instruments` = 10.000 créditos (1 req/s) — por isso
+fica em cache de 24h e NÃO é usada no caminho quente; `get_book_summary_*` já
+traz strike/expiry embutidos no nome do instrumento.
+
+A documentação pública diverge sobre o teto real para não-autenticado (há fonte
+citando 20 req/min). O pacing abaixo é conservador de propósito e configurável.
 """
 from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import random
+import math
 import time
-from datetime import date, timedelta
 
 import httpx
 
-from . import db
+DR_BASE = "https://www.deribit.com/api/v2"
+CB_BASE = "https://api.exchange.coinbase.com"
+KR_BASE = "https://api.kraken.com/0/public"
+BN_BASE = "https://api.binance.com/api/v3"          # opcional: geo-bloqueada em US
+BN_MIRROR = "https://data-api.binance.vision/api/v3"  # espelho público de dados
 
-FD_BASE = "https://api.football-data.org/v4"
-AF_BASE = "https://v3.football.football-api-sports.io"
-AF_BASE_ALT = "https://v3.football.api-sports.io"
-OPENLIGA_BASE = "https://www.openligadb.de/api"
-ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+UA = {"User-Agent": "Mozilla/5.0 (compatible; SigmaDesk/0.1; +local research)"}
+TIMEOUT = 20.0
 
-# football-data.org: competições do tier gratuito que interessam
-FD_COMPETITIONS = {
-    "BSA": "Brasileirão Série A",
-    "CL": "Champions League",
-    "PL": "Premier League",
-    "PD": "La Liga",
-    "SA": "Serie A (Itália)",
-    "BL1": "Bundesliga",
-    "FL1": "Ligue 1",
-    "PPL": "Primeira Liga (Portugal)",
-    "DED": "Eredivisie",
-    "ELC": "Championship (Inglaterra)",
-}
+# v4 da decisão do usuário: SÓ BTC e ETH. Nada de cauda longa com ponta fina.
+CURRENCIES = ("BTC", "ETH")
 
-# API-Football: ligas prioritárias (id, nome)
-AF_LEAGUES = {
-    71: "Brasileirão Série A",
-    72: "Brasileirão Série B",
-    73: "Copa do Brasil",
-    13: "Libertadores",
-    2: "Champions League",
-    39: "Premier League",
-    140: "La Liga",
-    135: "Serie A (Itália)",
-    78: "Bundesliga",
-    61: "Ligue 1",
-}
+COINBASE_PRODUCTS = {"BTC": "BTC-USD", "ETH": "ETH-USD"}
+KRAKEN_PAIRS = {"BTC": "XBTUSD", "ETH": "ETHUSD"}
+DERIBIT_INDEX = {"BTC": "btc_usd", "ETH": "eth_usd"}
+DERIBIT_PERP = {"BTC": "BTC-PERPETUAL", "ETH": "ETH-PERPETUAL"}
 
-# OpenLigaDB: shortcuts -> nome interno (mesmo nome usado no resto do app)
-# Fonte: https://www.openligadb.de/api/getavailableleagues
-OPENLIGA_LEAGUES = {
-    "bl1": "Bundesliga",
-    "bl2": "Championship (Inglaterra)",  # 2. Bundesliga - mapeado como segunda divisão para não perder jogos
-    "bl3": "Bundesliga",  # 3. Liga - fallback
-    "dfb": "Bundesliga",
-    "cl": "Champions League",
-    "el": "Champions League",  # Europa League -> cai no mesmo bucket
-    "em": "Champions League",
-    "wm": "Champions League",
-}
+# segundos entre chamadas ao MESMO host (conservador; medido na Etapa 0)
+MIN_INTERVAL = {"deribit": 0.6, "coinbase": 0.25, "kraken": 0.7, "binance": 0.25}
+_last_call: dict[str, float] = {}
 
-# OpenLigaDB shortcuts que vamos consultar por dia (custo zero, sem cota)
-OPENLIGA_SHORTCUTS = ["bl1", "bl2", "cl"]
+MONTHS = {"JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+          "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12}
 
-# ESPN: código da liga na ESPN -> nome interno (apenas principais, sem secundárias)
-# v2.4.3: removidas MLS, Liga MX, Argentine, Nations, amistosos — experiência ruim de análise
-ESPN_LEAGUES = {
-    "bra.1": "Brasileirão Série A",
-    "eng.1": "Premier League",
-    "esp.1": "La Liga",
-    "ita.1": "Serie A (Itália)",
-    "ger.1": "Bundesliga",
-    "fra.1": "Ligue 1",
-    "por.1": "Primeira Liga (Portugal)",
-    "ned.1": "Eredivisie",
-    "uefa.champions": "Champions League",
-    "conmebol.libertadores": "Libertadores",
-    "conmebol.sudamericana": "Libertadores",
-    "bra.copa": "Copa do Brasil",
-}
+# Deribit liquida opções às 08:00 UTC do dia do vencimento
+DELIVERY_HOUR_UTC = 8
 
-ESPN_CODES = ["bra.1", "eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "por.1", "ned.1", "uefa.champions", "conmebol.libertadores"]
+# Um strike é negociável se tem dois lados e spread não é absurdo.
+MAX_SPREAD_PCT = 0.25      # (ask-bid)/mid acima disso = ponta morta
+MIN_OI = 0.5               # open interest mínimo para entrar no radar
 
 
 class ProviderError(Exception):
-    pass
+    """Falha de provedor com mensagem legível para aparecer no painel."""
 
 
-# ---------------------------------------------------------------- football-data
-# Tier gratuito: 10 req/min. Em vez de estourar a cota em rajada e virar uma
-# enxurrada de 429 + esperas de 1 min (que parecia "o app travado"), as
-# chamadas são espaçadas de forma a caber no orçamento sempre.
-_FD_MIN_INTERVAL = 6.2          # segundos entre chamadas (~9,7 req/min)
-_fd_last_call = 0.0
-
-
-async def _fd_pace():
-    global _fd_last_call
+# ------------------------------------------------------------------ utilidades
+async def _pace(host: str) -> None:
+    """Ritma chamadas ao mesmo host (herdeiro de `_fd_pace` do FutAnalytics)."""
+    interval = MIN_INTERVAL.get(host, 0.3)
     now = time.monotonic()
-    wait = _fd_last_call + _FD_MIN_INTERVAL - now
+    last = _last_call.get(host, 0.0)
+    wait = interval - (now - last)
     if wait > 0:
         await asyncio.sleep(wait)
-    _fd_last_call = time.monotonic()
+    _last_call[host] = time.monotonic()
 
 
-def _retry_after_seconds(headers) -> float:
+def _f(x) -> float | None:
+    """Float tolerante: None, string vazia e NaN viram None."""
+    if x is None or x == "":
+        return None
     try:
-        return max(1.0, float(headers.get("Retry-After", "15")))
+        v = float(x)
     except (TypeError, ValueError):
-        return 15.0
+        return None
+    return None if math.isnan(v) or math.isinf(v) else v
 
 
-async def _fd_get(client: httpx.AsyncClient, path: str, token: str, params=None):
-    """GET com timeout/rate-limit tratados: TODO erro vira ProviderError.
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
-    Antes, um ConnectError/ReadTimeout/HTTP 5xx escapava sem tratamento e
-    derrubava o /api/day INTEIRO (500) — nenhuma análise aparecia.
+
+def parse_instrument(name: str) -> dict | None:
+    """Decompõe o nome de instrumento da Deribit.
+
+    Formatos reais:
+        BTC-28SEP26-88000-P          (inversa, cotada em BTC)
+        BTC-USDC-26SEP25-84000-C     (linear, cotada em USDC)
+        BTC-PERPETUAL                (perpétuo)
+        BTC-26SEP26                  (futuro com vencimento)
     """
-    last_err: Exception | None = None
-    for attempt in range(4):
-        await _fd_pace()
-        try:
-            r = await client.get(
-                f"{FD_BASE}{path}",
-                headers={"X-Auth-Token": token},
-                params=params or {},
-                timeout=25,
-            )
-        except httpx.HTTPError as e:
-            last_err = e
-            await asyncio.sleep(1.5)
-            continue
-        if r.status_code == 429:
-            await asyncio.sleep(min(_retry_after_seconds(r.headers) + 1, 35))
-            continue
-        if r.status_code in (400, 403):
-            raise ProviderError(f"football-data.org recusou ({r.status_code}): {r.text[:200]}")
-        try:
-            r.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            last_err = e
-            await asyncio.sleep(1.5)
-            continue
-        try:
-            return r.json()
-        except ValueError as e:
-            raise ProviderError(f"football-data.org devolveu resposta inválida: {e}")
-    if last_err is not None:
-        raise ProviderError(f"Falha de conexão com a football-data.org: {last_err}")
-    raise ProviderError("Limite de requisições da football-data.org excedido; tente em 1 minuto.")
-
-
-BR_TZ = dt.timezone(dt.timedelta(hours=-3))  # America/Sao_Paulo
-
-
-def _local_day(utc_iso: str) -> str:
-    """Converte kickoff UTC para a data local do Brasil (UTC-3).
-
-    Jogos FUTUROS sem horário fechado pela liga chegam da API marcados
-    "T00:00:00Z" (hora placeholder). Converter 00:00 UTC para UTC-3 jogava o
-    jogo para a VÉSPERA — o jogo de sábado aparecia na sexta (ou "sumia" do
-    dia certo). Hora placeholder fica na data oficial que a própria API marca.
-    Jogos reais a 00:00 UTC praticamente não existem nas ligas monitoradas.
-    """
-    d = dt.datetime.fromisoformat(utc_iso.replace("Z", "+00:00"))
-    if (d.hour, d.minute, d.second) == (0, 0, 0):
-        return str(d.date())
-    return str(d.astimezone(BR_TZ).date())
-
-
-def _fd_collect(matches: list, day: str) -> tuple[list, dict, int]:
-    """Filtra as partidas da API: (jogos do dia pedido, contagem por dia, nº na janela)."""
-    out = []
-    counts: dict[str, int] = {}
-    monitored = 0
-    for m in matches or []:
-        try:
-            code = m.get("competition", {}).get("code")
-            if code not in FD_COMPETITIONS:
-                continue
-            utc = m.get("utcDate")
-            if not utc:
-                continue
-            monitored += 1
-            local_d = _local_day(utc)
-            counts[local_d] = counts.get(local_d, 0) + 1
-            if local_d != day:
-                continue
-            out.append({
-                "id": f"fd-{m['id']}",
-                "provider": "fd",
-                "league": FD_COMPETITIONS[code],
-                "kickoff_utc": utc,
-                "status": m.get("status"),
-                "home": {"id": m["homeTeam"]["id"], "name": m["homeTeam"]["name"]},
-                "away": {"id": m["awayTeam"]["id"], "name": m["awayTeam"]["name"]},
-            })
-        except (KeyError, TypeError, ValueError):
-            continue  # jogo mal formado na API: pula, não derruba o dia
-    return out, counts, monitored
-
-
-async def _fd_fixtures_by_competition(client: httpx.AsyncClient, token: str,
-                                      d0: dt.date, day: str) -> tuple[list, dict]:
-    """Plano B: busca /competitions/{code}/matches, UMA liga por vez.
-
-    Acionado quando a resposta global /matches veio estranhamente vazia (a API
-    devolve HTTP 200 com lista vazia em alguns problemas de permissão/plano —
-    sem erro — e o painel mostrava "dia sem jogos" em TODOS os dias futuros,
-    enquanto os passados pareciam funcionar por estarem cacheados 7 dias).
-    O endpoint por competição devolve 403 explícito nesses casos, que o app
-    transforma em mensagem clara em vez de silêncio.
-    """
-    out: list = []
-    counts: dict[str, int] = {}
-    for code in FD_COMPETITIONS:
-        try:
-            data = await _fd_get(
-                client, f"/competitions/{code}/matches", token,
-                {"dateFrom": str(d0 - timedelta(days=4)),
-                 "dateTo": str(d0 + timedelta(days=5))},
-            )
-        except ProviderError:
-            raise  # 403/bloqueio de plano tem que virar mensagem visível
-        fx, cnt, _m = _fd_collect(data.get("matches", []), day)
-        out.extend(fx)
-        for d, n in cnt.items():
-            counts[d] = counts.get(d, 0) + n
-    return out, counts
-
-
-async def fd_fixtures(token: str, day: str):
-    key = f"fd:fixtures:v4:{day}"
-    cached = db.cache_get(key)
-    if cached is not None:
-        return cached
-    # Janela ampla ao redor do dia: (1) o dateTo da API é EXCLUSIVO (não inclui
-    # o próprio dia — por isso o +5 para cobrir ±4 dias de verdade); (2) jogos
-    # noturnos no Brasil caem no dia seguinte em UTC; (3) MESMO CUSTO DE COTA
-    # (1 requisição) e o painel ganha a contagem de jogos de todos os dias da
-    # semana — dia sem rodada deixa de ser um beco sem saída: mostramos QUANDO
-    # os próximos jogos acontecem.
-    try:
-        d0 = dt.date.fromisoformat(day)
-    except (TypeError, ValueError):
-        raise ProviderError(f"Data inválida: {day!r}. Use o formato AAAA-MM-DD.")
-    dbg = {"endpoint": "/matches",
-           "window": f"{d0 - timedelta(days=4)} a {d0 + timedelta(days=4)}",
-           "fallback": False}
-    async with httpx.AsyncClient() as client:
-        data = await _fd_get(
-            client, "/matches", token,
-            {"dateFrom": str(d0 - timedelta(days=4)),
-             "dateTo": str(d0 + timedelta(days=5)),  # dateTo é EXCLUSIVO (doc v4)
-             "limit": 500},
-        )
-        matches = data.get("matches", []) or []
-        res_count = ((data.get("resultSet") or {}).get("count"))
-        out, counts, monitored = _fd_collect(matches, day)
-        dbg.update(api_matches=len(matches), api_reported_count=res_count,
-                   monitored_matches=monitored, day_matches=len(out))
-        # Resposta vazia numa janela de 9 dias com ~10 ligas ativas é quase
-        # impossível de ser verdade — muito mais provável ser permissão/plano
-        # resolvido em silêncio pela API (ou truncamento: resultSet.count maior
-        # que o número de jogos devolvidos). Plano B: por competição.
-        truncated = isinstance(res_count, int) and res_count > len(matches)
-        if not out and (not matches or truncated):
-            dbg["fallback"] = True
-            dbg["fallback_reason"] = ("truncada" if truncated else "vazia")
-            out, counts = await _fd_fixtures_by_competition(client, token, d0, day)
-            dbg["day_matches"] = len(out)
-    # Resultado vazio (dia sem rodada genuíno) expira rápido: se a agenda muda
-    # (jogo remarcado/criado), o painel percebe em minutos, não em horas.
-    if out:
-        ttl = 3600 if day >= str(date.today()) else 7 * 86400
+    if not name or "-" not in name:
+        return None
+    parts = name.split("-")
+    ccy = parts[0]
+    if ccy not in CURRENCIES:
+        return None
+    if len(parts) == 2:
+        return {"ccy": ccy, "kind": "perpetual" if parts[1] == "PERPETUAL" else "future",
+                "expiry": None, "strike": None, "option": None, "settlement": "coin"}
+    if len(parts) == 5 and parts[1] == "USDC":       # opção linear
+        _c, _usdc, exp, strike, opt = parts
+        settlement = "USDC"
+    elif len(parts) == 4:                            # opção inversa
+        _c, exp, strike, opt = parts
+        settlement = "coin"
     else:
-        ttl = 600
-    db.cache_set(key, out, ttl)
-    # Contagem de jogos por dia da JANELA (mesma resposta da API: custo zero em
-    # cota). Dias sem rodada nas ligas monitoradas (ex.: segunda-feira) não são
-    # defeito — o painel usa estas contagens para mostrar quando voltam a haver
-    # jogos em vez de um "nenhum jogo" que parece quebra.
-    db.cache_set(f"fd:daycounts:v1:{day}", counts, ttl)
-    db.cache_set(f"fd:debug:v1:{day}", dbg, ttl)
-    return out
+        return None
+    if opt not in ("C", "P"):
+        return None
+    d = parse_expiry(exp)
+    k = _f(strike)
+    if d is None or k is None:
+        return None
+    return {"ccy": ccy, "kind": "option", "expiry": d, "strike": k,
+            "option": opt, "settlement": settlement}
 
 
-def fd_day_counts(day: str) -> dict:
-    """Jogos por dia na janela já baixada do dia pedido (só cache; não gasta cota)."""
-    return db.cache_get(f"fd:daycounts:v1:{day}") or {}
+def parse_expiry(code: str) -> dt.date | None:
+    """'28SEP26' -> date(2026,9,28)  ·  '9OCT26' -> date(2026,10,9)
 
+    BUG PEGO POR DADO REAL NA ETAPA 0: a Deribit NÃO zero-à-esquerda o dia.
+    Vencimentos de dia 1 a 9 vêm como '9OCT26', '3OCT26', '1AUG26'. Um parser
+    que assume 2 dígitos fixos perde silenciosamente ~9% dos vencimentos — e
+    como são justamente os mais curtos (diários/semanais), destruiria a parte
+    mais líquida da superfície sem levantar erro nenhum.
 
-def fd_day_debug(day: str) -> dict:
-    """Diagnóstico de etapas do dia pedido (só cache; alimenta a tela vazia)."""
-    return db.cache_get(f"fd:debug:v1:{day}") or {}
-
-
-async def fd_team_recent(token: str, team_id: int, team_name: str):
-    key = f"fd:team:{team_id}"
-    cached = db.cache_get(key)
-    if cached is not None:
-        return cached
-    today = date.today()
-    async with httpx.AsyncClient() as client:
-        data = await _fd_get(
-            client, f"/teams/{team_id}/matches", token,
-            {
-                "status": "FINISHED",
-                "dateFrom": str(today - timedelta(days=240)),
-                "dateTo": str(today),
-                "limit": 30,
-            },
-        )
-    games = []
-    for m in sorted(data.get("matches", []), key=lambda x: x.get("utcDate") or "", reverse=True)[:18]:
-        try:
-            ft = m.get("score", {}).get("fullTime", {})
-            hg, ag = ft.get("home"), ft.get("away")
-            if hg is None or ag is None:
-                continue
-            played = dt.datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00")).date()
-            days_ago = (today - played).days
-            is_home = m["homeTeam"]["id"] == team_id
-            gf, ga = (hg, ag) if is_home else (ag, hg)
-            games.append([days_ago, is_home, gf, ga])
-        except (KeyError, TypeError, ValueError):
-            continue  # linha corrompida não derruba o histórico do time
-    db.cache_set(key, games, 12 * 3600)
-    return games
-
-
-# ---------------------------------------------------------------- API-Football
-def _af_translate_error(errors: dict) -> str:
-    """Converte erros da API-Football em mensagem acionável em português."""
-    joined = " ".join(str(v) for v in errors.values())
-    low = joined.lower()
-    if "not have access to this season" in low or "try from 2021" in low:
-        return (
-            "O plano GRATUITO da API-Football não dá mais acesso à temporada atual "
-            "(só libera dados de 2021 a 2023). Para jogos reais de hoje sem pagar, "
-            "troque o provedor para football-data.org em Configurações "
-            "(token grátis em football-data.org/client/register). "
-            "A API-Football atual só serve com plano pago."
-        )
-    if "invalid api key" in low or "token" in errors:
-        return (
-            "Chave da API-Football inválida. Confira se copiou a chave do painel "
-            "dashboard.api-football.com (aba Account > API Key), sem espaços. "
-            "Atenção: a chave do RapidAPI é diferente da chave direta da api-sports.io; "
-            "esta plataforma usa a chave direta."
-        )
-    if "request limit" in low or "rate limit" in low or "too many" in low:
-        return "Limite de requisições da API-Football atingido. Aguarde e tente novamente."
-    return f"API-Football retornou erro: {joined}"
-
-
-async def _af_get(client: httpx.AsyncClient, path: str, key: str, params=None):
-    today = str(date.today())
-    if db.api_usage_today(today) >= 95:
-        raise ProviderError("Orçamento diário da API-Football (100 req) quase esgotado; usando apenas cache.")
-    last_err = None
-    for base in (AF_BASE_ALT,):
-        try:
-            r = await client.get(
-                f"{base}{path}",
-                headers={"x-apisports-key": key},
-                params=params or {},
-                timeout=25,
-            )
-            db.api_usage_inc(today)
-            data = r.json()
-            errs = data.get("errors")
-            if errs and isinstance(errs, dict):
-                raise ProviderError(_af_translate_error(errs))
-            return data
-        except (httpx.HTTPError, ValueError) as e:
-            last_err = e
-    raise ProviderError(f"Falha de conexão com a API-Football: {last_err}")
-
-
-async def af_status(key: str) -> dict:
-    """Valida a chave e retorna plano/uso; também testa acesso à temporada atual."""
-    async with httpx.AsyncClient() as client:
-        data = await _af_get(client, "/status", key)
-        resp = data.get("response") or {}
-        sub = resp.get("subscription", {}) or {}
-        req = resp.get("requests", {}) or {}
-        info = {
-            "ok": True,
-            "plan": sub.get("plan", "?"),
-            "requests_today": req.get("current", 0),
-            "requests_limit": req.get("limit_day", 0),
-        }
-        # teste real: o plano consegue ver jogos de hoje?
-        try:
-            fx = await _af_get(client, "/fixtures", key, {"date": str(date.today())})
-            info["current_season_ok"] = bool(fx.get("response")) or not fx.get("errors")
-        except ProviderError as e:
-            info["current_season_ok"] = False
-            info["season_error"] = str(e)
-        return info
-
-
-async def fd_status(token: str) -> dict:
-    """Valida o token da football-data.org listando as competições acessíveis."""
-    async with httpx.AsyncClient() as client:
-        data = await _fd_get(client, "/competitions", token)
-    comps = [c.get("code") for c in data.get("competitions", [])]
-    covered = [FD_COMPETITIONS[c] for c in comps if c in FD_COMPETITIONS]
-    return {"ok": True, "competitions": covered}
-
-
-async def af_fixtures(key: str, day: str):
-    ck = f"af:fixtures:{day}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    async with httpx.AsyncClient() as client:
-        data = await _af_get(client, "/fixtures", key, {"date": day, "timezone": "America/Sao_Paulo"})
-    out = []
-    for f in data.get("response", []):
-        try:
-            lg = f.get("league", {})
-            if lg.get("id") not in AF_LEAGUES:
-                continue
-            fx = f.get("fixture", {})
-            teams = f.get("teams", {})
-            out.append({
-                "id": f"af-{fx['id']}",
-                "provider": "af",
-                "league": AF_LEAGUES[lg["id"]],
-                "kickoff_utc": fx.get("date"),
-                "status": fx.get("status", {}).get("short"),
-                "home": {"id": teams["home"]["id"], "name": teams["home"]["name"]},
-                "away": {"id": teams["away"]["id"], "name": teams["away"]["name"]},
-            })
-        except (KeyError, TypeError, ValueError):
-            continue
-    db.cache_set(ck, out, 3600)
-    return out
-
-
-async def af_team_recent(key: str, team_id: int, team_name: str):
-    ck = f"af:team:{team_id}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    async with httpx.AsyncClient() as client:
-        data = await _af_get(client, "/fixtures", key, {"team": team_id, "last": 15})
-    today = date.today()
-    games = []
-    for f in data.get("response", []):
-        try:
-            goals = f.get("goals", {})
-            hg, ag = goals.get("home"), goals.get("away")
-            if hg is None or ag is None:
-                continue
-            played = dt.datetime.fromisoformat(f["fixture"]["date"].replace("Z", "+00:00")).date()
-            days_ago = (today - played).days
-            is_home = f["teams"]["home"]["id"] == team_id
-            gf, ga = (hg, ag) if is_home else (ag, hg)
-            games.append([days_ago, is_home, gf, ga])
-        except (KeyError, TypeError, ValueError):
-            continue
-    db.cache_set(ck, games, 12 * 3600)
-    return games
-
-
-async def af_odds(key: str, fixture_id: int):
-    ck = f"af:odds:{fixture_id}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    async with httpx.AsyncClient() as client:
-        data = await _af_get(client, "/odds", key, {"fixture": fixture_id})
-    odds = {}
-    try:
-        bms = data["response"][0]["bookmakers"]
-    except (IndexError, KeyError, TypeError):
-        bms = []
-    for bm in bms[:3]:
-        for bet in bm.get("bets", []):
-            name = bet.get("name", "")
-            for v in bet.get("values", []):
-                try:
-                    val, odd = str(v.get("value")), float(v.get("odd", 0) or 0)
-                except (TypeError, ValueError):
-                    continue
-                mk = None
-                if name == "Match Winner":
-                    mk = {"Home": "home", "Draw": "draw", "Away": "away"}.get(val)
-                elif name == "Goals Over/Under":
-                    if val == "Over 0.5": mk = "over_0.5"
-                    elif val == "Over 1.5": mk = "over_1.5"
-                    elif val == "Over 2.5": mk = "over_2.5"
-                    elif val == "Over 3.5": mk = "over_3.5"
-                    elif val == "Under 0.5": mk = "under_0.5"
-                    elif val == "Under 1.5": mk = "under_1.5"
-                    elif val == "Under 2.5": mk = "under_2.5"
-                    elif val == "Under 3.5": mk = "under_3.5"
-                elif name == "Both Teams Score":
-                    mk = {"Yes": "btts_yes", "No": "btts_no"}.get(val)
-                elif name in ("Home Over/Under", "Home Team Total"):
-                    mk = {"Over 0.5": "ht_0.5", "Over 1.5": "ht_1.5"}.get(val)
-                elif name in ("Away Over/Under", "Away Team Total"):
-                    mk = {"Over 0.5": "at_0.5", "Over 1.5": "at_1.5"}.get(val)
-                elif name == "Double Chance":
-                    mk = {"Home/Draw": "dc_1x", "Draw/Away": "dc_x2", "Home/Away": "dc_12"}.get(val)
-                if mk and odd > 1.0:
-                    odds[mk] = max(odds.get(mk, 0), odd)  # melhor odd entre casas
-    db.cache_set(ck, odds, 2 * 3600)
-    return odds
-
-
-# -------------------------------------------------------------- fallback: OpenLigaDB (sem chave, sem cota)
-# Docs: https://www.openligadb.de/api/getmatchdata/{leagueShortcut}/{leagueSeason}
-# Exemplo: /api/getmatchdata/bl1/2025  -> todos os jogos da Bundesliga 2025/26
-# Cada jogo tem matchDateTimeUTC, team1/team2, matchID etc.
-
-def _ol_current_season(d: dt.date) -> int:
-    # temporada europeia: 2025 = 2025/26, começa em julho
-    return d.year if d.month >= 7 else d.year - 1
-
-async def _ol_get(client: httpx.AsyncClient, path: str):
-    try:
-        r = await client.get(f"{OPENLIGA_BASE}{path}", timeout=20,
-                             headers={"User-Agent": "Mozilla/5.0 (FutAnalytics fallback)"})
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        raise ProviderError(f"OpenLigaDB falhou: {e}")
-
-async def openliga_fixtures(day: str) -> list:
-    """Busca jogos do dia no OpenLigaDB (grátis, sem chave)."""
-    ck = f"ol:fixtures:v2:{day}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    try:
-        d0 = dt.date.fromisoformat(day)
-    except (TypeError, ValueError):
-        raise ProviderError(f"Data inválida: {day}")
-    seasons = [_ol_current_season(d0), _ol_current_season(d0) - 1]
-    out = []
-    success = False
-    errors = 0
-    async with httpx.AsyncClient() as client:
-        for season in seasons:
-            for shortcut in OPENLIGA_SHORTCUTS:
-                try:
-                    data = await _ol_get(client, f"/getmatchdata/{shortcut}/{season}")
-                    success = True
-                except ProviderError:
-                    errors += 1
-                    continue
-                if not isinstance(data, list):
-                    continue
-                for m in data:
-                    try:
-                        utc_str = m.get("matchDateTimeUTC") or m.get("matchDateTime")
-                        if not utc_str:
-                            continue
-                        if not utc_str.endswith("Z") and "T" in utc_str:
-                            utc_iso = utc_str + "Z" if "+" not in utc_str else utc_str
-                        else:
-                            utc_iso = utc_str
-                        try:
-                            local_d = _local_day(utc_iso)
-                        except Exception:
-                            local_d = utc_iso[:10]
-                        if local_d != day:
-                            continue
-                        t1 = m.get("team1") or {}
-                        t2 = m.get("team2") or {}
-                        t1_name = t1.get("teamName") or t1.get("shortName") or "Time A"
-                        t2_name = t2.get("teamName") or t2.get("shortName") or "Time B"
-                        league_name = OPENLIGA_LEAGUES.get(shortcut, f"Liga {shortcut}")
-                        mid = m.get("matchID") or f"{shortcut}-{t1.get('teamId')}-{t2.get('teamId')}"
-                        out.append({
-                            "id": f"ol-{mid}",
-                            "provider": "openliga",
-                            "league": league_name,
-                            "kickoff_utc": utc_iso,
-                            "status": "SCHEDULED" if m.get("matchIsFinished") is False else "FINISHED" if m.get("matchIsFinished") else "SCHEDULED",
-                            "home": {"id": t1.get("teamId", 0), "name": t1_name},
-                            "away": {"id": t2.get("teamId", 0), "name": t2_name},
-                            "_ol_shortcut": shortcut,
-                            "_ol_season": season,
-                        })
-                    except (KeyError, TypeError, ValueError):
-                        continue
-            if out:
-                break  # já achou jogos, não precisa varrer temporada anterior
-    if not success and errors > 0:
-        raise ProviderError(f"OpenLigaDB fora do ar (tentou {errors} ligas)")
-    ttl = 3600 if day >= str(date.today()) else 6 * 3600
-    db.cache_set(ck, out, ttl)
-    return out
-
-async def openliga_team_recent(team_id: int, team_name: str) -> list:
-    """Histórico recente via OpenLigaDB: varre temporadas atual e anterior."""
-    ck = f"ol:team:{team_id}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    today = date.today()
-    seasons = [_ol_current_season(today), _ol_current_season(today) - 1]
-    games = []
-    async with httpx.AsyncClient() as client:
-        for season in seasons:
-            for shortcut in OPENLIGA_SHORTCUTS:
-                try:
-                    data = await _ol_get(client, f"/getmatchdata/{shortcut}/{season}")
-                except ProviderError:
-                    continue
-                if not isinstance(data, list):
-                    continue
-                for m in data:
-                    try:
-                        if not m.get("matchIsFinished"):
-                            continue
-                        t1 = m.get("team1") or {}
-                        t2 = m.get("team2") or {}
-                        if t1.get("teamId") != team_id and t2.get("teamId") != team_id:
-                            continue
-                        # resultado final
-                        res = None
-                        for r in (m.get("matchResults") or []):
-                            if r.get("resultTypeID") == 2:  # Endergebnis
-                                res = r
-                                break
-                        if not res:
-                            # pega último resultado disponível
-                            results = m.get("matchResults") or []
-                            if results:
-                                res = results[-1]
-                        if not res:
-                            continue
-                        hg = res.get("pointsTeam1")
-                        ag = res.get("pointsTeam2")
-                        if hg is None or ag is None:
-                            continue
-                        dt_str = m.get("matchDateTimeUTC") or m.get("matchDateTime") or ""
-                        try:
-                            played = dt.datetime.fromisoformat(dt_str.replace("Z", "+00:00")).date()
-                        except Exception:
-                            continue
-                        days_ago = (today - played).days
-                        if days_ago < 0 or days_ago > 240:
-                            continue
-                        is_home = t1.get("teamId") == team_id
-                        gf, ga = (hg, ag) if is_home else (ag, hg)
-                        games.append([days_ago, is_home, gf, ga])
-                    except (KeyError, TypeError, ValueError):
-                        continue
-    # ordena por mais recente e limita
-    games = sorted(games, key=lambda x: x[0])[:20]
-    db.cache_set(ck, games, 12 * 3600)
-    return games
-
-
-# -------------------------------------------------------------- fallback: ESPN (sem chave, cobre Brasileirão)
-async def _espn_get(client: httpx.AsyncClient, path: str, params=None):
-    try:
-        r = await client.get(f"{ESPN_BASE}{path}", params=params or {}, timeout=20,
-                             headers={"User-Agent": "Mozilla/5.0 (FutAnalytics fallback)"})
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        raise ProviderError(f"ESPN falhou: {e}")
-
-async def espn_fixtures(day: str) -> list:
-    """Busca jogos do dia na ESPN (grátis, sem chave). Apenas ligas principais."""
-    ck = f"espn:fixtures:v2:{day}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    try:
-        d0 = dt.date.fromisoformat(day)
-    except (TypeError, ValueError):
-        raise ProviderError(f"Data inválida: {day}")
-    espn_date = d0.strftime("%Y%m%d")
-    out = []
-    success = False
-    errors = 0
-    async with httpx.AsyncClient() as client:
-        for code in ESPN_CODES:
-            try:
-                data = await _espn_get(client, f"/{code}/scoreboard", {"dates": espn_date})
-                success = True
-            except ProviderError:
-                errors += 1
-                continue
-            events = data.get("events") or []
-            for ev in events:
-                try:
-                    comps = ev.get("competitions") or []
-                    if not comps:
-                        continue
-                    comp = comps[0]
-                    competitors = comp.get("competitors") or []
-                    if len(competitors) < 2:
-                        continue
-                    home_c = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
-                    away_c = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1] if len(competitors) > 1 else competitors[0])
-                    home_team = home_c.get("team") or {}
-                    away_team = away_c.get("team") or {}
-                    home_name = home_team.get("displayName") or home_team.get("name") or "Casa"
-                    away_name = away_team.get("displayName") or away_team.get("name") or "Fora"
-                    utc_iso = ev.get("date") or comp.get("date") or ""
-                    if not utc_iso:
-                        continue
-                    try:
-                        local_d = _local_day(utc_iso)
-                    except Exception:
-                        local_d = utc_iso[:10]
-                    if local_d != day:
-                        continue
-                    league_name = ESPN_LEAGUES.get(code, code)
-                    out.append({
-                        "id": f"espn-{ev.get('id')}",
-                        "provider": "espn",
-                        "league": league_name,
-                        "kickoff_utc": utc_iso,
-                        "status": comp.get("status", {}).get("type", {}).get("name", "SCHEDULED"),
-                        "home": {"id": int(home_team.get("id", 0) or 0), "name": home_name},
-                        "away": {"id": int(away_team.get("id", 0) or 0), "name": away_name},
-                        "_espn_league": code,
-                    })
-                except (KeyError, TypeError, ValueError):
-                    continue
-    if not success and errors > 0:
-        raise ProviderError(f"ESPN fora do ar (tentou {errors} ligas)")
-    ttl = 3600 if day >= str(date.today()) else 6 * 3600
-    db.cache_set(ck, out, ttl)
-    return out
-
-async def espn_team_recent(team_id: int, team_name: str) -> list:
-    """Histórico recente via ESPN: tenta buscar schedule do time nas ligas principais."""
-    ck = f"espn:team:{team_id}"
-    cached = db.cache_get(ck)
-    if cached is not None:
-        return cached
-    today = date.today()
-    games = []
-    # Para simplificar, varre as ligas principais buscando o time por nome
-    # Se não achar, retorna vazio e o modelo usa só médias da liga + xG (se houver)
-    async with httpx.AsyncClient() as client:
-        for code in ESPN_CODES[:6]:  # só as principais para não estourar
-            try:
-                # endpoint de schedule: /{league}/teams/{teamId}/schedule
-                # team_id da ESPN é diferente, então tentamos buscar por nome via scoreboard histórico
-                # fallback: busca últimos 30 dias de scoreboard e filtra por nome
-                for delta in range(0, 60, 7):
-                    d = today - timedelta(days=delta)
-                    espn_date = d.strftime("%Y%m%d")
-                    try:
-                        data = await _espn_get(client, f"/{code}/scoreboard", {"dates": espn_date})
-                    except ProviderError:
-                        continue
-                    for ev in data.get("events") or []:
-                        try:
-                            comps = ev.get("competitions") or []
-                            if not comps:
-                                continue
-                            comp = comps[0]
-                            # só jogos finalizados
-                            if comp.get("status", {}).get("type", {}).get("completed") is not True:
-                                continue
-                            competitors = comp.get("competitors") or []
-                            # verifica se nosso time está no jogo (por nome aproximado)
-                            found = False
-                            is_home = False
-                            gf = ga = None
-                            for c in competitors:
-                                t = c.get("team") or {}
-                                name = (t.get("displayName") or "").lower()
-                                if team_name.lower() in name or name in team_name.lower():
-                                    found = True
-                                    is_home = c.get("homeAway") == "home"
-                                    # score
-                                    try:
-                                        gf = int(c.get("score", 0))
-                                    except (TypeError, ValueError):
-                                        gf = None
-                            if not found:
-                                continue
-                            # pega placar adversário
-                            for c in competitors:
-                                if (c.get("homeAway") == "home") != is_home:
-                                    try:
-                                        ga = int(c.get("score", 0))
-                                    except (TypeError, ValueError):
-                                        ga = None
-                            if gf is None or ga is None:
-                                continue
-                            played = dt.datetime.fromisoformat((ev.get("date") or "").replace("Z", "+00:00")).date()
-                            days_ago = (today - played).days
-                            if days_ago < 0 or days_ago > 240:
-                                continue
-                            games.append([days_ago, is_home, gf, ga])
-                        except (KeyError, TypeError, ValueError):
-                            continue
-                    if len(games) >= 15:
-                        break
-            except Exception:
-                continue
-            if len(games) >= 15:
-                break
-    games = sorted(games, key=lambda x: x[0])[:20]
-    db.cache_set(ck, games, 12 * 3600)
-    return games
-
-
-# Função de fallback automático: tenta fd -> openliga -> espn -> (vazio, não demo)
-# v2.4.1: corrige bug que fazia cair no demo em dia sem rodada genuíno.
-# Demo só é usado quando o usuário escolhe demo explicitamente ou quando TODAS
-# as fontes reais falham por erro de rede/token. Dia sem jogo mostra "Nenhum jogo"
-# com chips dos próximos dias, não jogos fake tipo "Arsenal x Fortaleza".
-async def fixtures_with_fallback(primary: str, day: str, fd_token: str = "", af_key: str = "") -> tuple[list, str, dict]:
+    Por isso a leitura é ANCORA DA DIREITA: os 5 últimos caracteres são sempre
+    MÊS(3 letras) + ANO(2 dígitos); o que sobra à esquerda é o dia.
     """
-    Retorna (fixtures, provider_usado, info_fallback)
-    info_fallback: {tried: [...], used: str, fallback: bool, reason: str}
+    if not code or len(code) < 6:
+        return None
+    mon = MONTHS.get(code[-5:-2].upper())
+    if mon is None:
+        return None
+    try:
+        day = int(code[:-5])
+        year = int(code[-2:]) + 2000
+    except ValueError:
+        return None
+    try:
+        return dt.date(year, mon, day)
+    except ValueError:      # dia impossível, ex.: 31FEB26
+        return None
+
+
+def delivery_dt(expiry: dt.date) -> dt.datetime:
+    return dt.datetime(expiry.year, expiry.month, expiry.day,
+                       DELIVERY_HOUR_UTC, tzinfo=dt.timezone.utc)
+
+
+def days_to_expiry(expiry: dt.date, now: dt.datetime | None = None) -> float:
+    """DTE fracionário — cripto não tem dia útil, o tempo é contínuo."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    return max(0.0, (delivery_dt(expiry) - now).total_seconds() / 86400.0)
+
+
+# ------------------------------------------------------------------ normalização
+def _candle(ts, o, h, l, c, v=None) -> dict:
+    ts = int(ts)
+    return {"ts": ts if ts > 10**11 else ts * 1000,
+            "o": _f(o), "h": _f(h), "l": _f(l), "c": _f(c), "v": _f(v) or 0.0}
+
+
+def _option_row(r: dict, now: dt.datetime) -> dict | None:
+    """Linha crua do book summary -> opção normalizada."""
+    meta = parse_instrument(r.get("instrument_name", ""))
+    if not meta or meta["kind"] != "option":
+        return None
+    bid, ask = _f(r.get("bid_price")), _f(r.get("ask_price"))
+    mid = _f(r.get("mid_price"))
+    if mid is None and bid is not None and ask is not None:
+        mid = (bid + ask) / 2
+    spread_pct = None
+    if bid is not None and ask is not None and mid and mid > 0:
+        spread_pct = (ask - bid) / mid
+    iv = _f(r.get("mark_iv"))
+    oi = _f(r.get("open_interest")) or 0.0
+    dte = days_to_expiry(meta["expiry"], now)
+    liquid = (bid is not None and ask is not None and mid is not None and mid > 0
+              and (spread_pct or 9) <= MAX_SPREAD_PCT and oi >= MIN_OI)
+    return {
+        "instrument": r["instrument_name"],
+        "ccy": meta["ccy"],
+        "settlement": meta["settlement"],
+        "expiry": meta["expiry"].isoformat(),
+        "strike": meta["strike"],
+        "kind": meta["option"],
+        "dte": round(dte, 3),
+        "mark_iv": round(iv, 3) if iv is not None else None,   # em % (18.69)
+        "bid": bid, "ask": ask, "mid": mid,
+        "spread_pct": round(spread_pct, 4) if spread_pct is not None else None,
+        "mark_price": _f(r.get("mark_price")),
+        "last": _f(r.get("last")),
+        "oi": oi,
+        "volume": _f(r.get("volume")) or 0.0,
+        "volume_usd": _f(r.get("volume_usd")) or 0.0,
+        "underlying_price": _f(r.get("underlying_price")),
+        "underlying_index": r.get("underlying_index"),
+        "liquid": liquid,
+    }
+
+
+# ------------------------------------------------------------------ DERIBIT
+async def dr_rpc(client: httpx.AsyncClient, method: str, params: dict | None = None):
+    """JSON-RPC sobre GET. Lança ProviderError com o motivo real do JSON-RPC."""
+    await _pace("deribit")
+    url = f"{DR_BASE}/{method}"
+    try:
+        r = await client.get(url, params=params or {}, timeout=TIMEOUT, headers=UA)
+        r.raise_for_status()
+        payload = r.json()
+    except httpx.HTTPStatusError as e:
+        raise ProviderError(f"Deribit HTTP {e.response.status_code} em {method}") from e
+    except (httpx.HTTPError, ValueError) as e:
+        raise ProviderError(f"Deribit inacessível em {method}: {e}") from e
+    if "error" in payload and payload["error"]:
+        err = payload["error"]
+        raise ProviderError(
+            f"Deribit {method}: [{err.get('code')}] {err.get('message')} "
+            f"{(err.get('data') or '')}")
+    return payload.get("result")
+
+
+async def dr_option_chain(ccy: str = "BTC") -> list[dict]:
+    """CADEIA INTEIRA de opções de uma moeda em uma chamada (descoberta 1)."""
+    if ccy not in CURRENCIES:
+        raise ProviderError(f"moeda {ccy} fora do radar (só {', '.join(CURRENCIES)})")
+    async with httpx.AsyncClient() as client:
+        rows = await dr_rpc(client, "public/get_book_summary_by_currency",
+                            {"currency": ccy, "kind": "option"})
+    if not isinstance(rows, list):
+        raise ProviderError(f"Deribit devolveu formato inesperado para cadeia {ccy}")
+    now = dt.datetime.now(dt.timezone.utc)
+    out = [o for o in (_option_row(r, now) for r in rows) if o]
+    if not out:
+        raise ProviderError(f"cadeia {ccy} vazia (0 opções parseáveis de {len(rows)} linhas)")
+    out.sort(key=lambda o: (o["expiry"], o["strike"], o["kind"]))
+    return out
+
+
+async def dr_dvol(ccy: str = "BTC", resolution: int = 86400,
+                  days: int = 1000) -> list[dict]:
+    """DVOL diário (o VIX de cripto). Piso duro: 2024-01-01 (descoberta 3).
+
+    ATENÇÃO: o parâmetro é `currency`, não `index_name` (descoberta 2).
     """
-    tried = []
-    last_error = None
-
-    # 1) primário: fd
-    if primary == "fd":
-        if not fd_token:
-            # sem token, não tenta fd — vai direto para fallbacks gratuitos
-            tried.append("fd: no-token")
-        else:
-            tried.append("fd")
-            try:
-                fx = await fd_fixtures(fd_token, day)
-                # fd_fixtures sempre retorna lista (pode ser vazia = dia sem rodada)
-                # Verifica se é falha impossível (0 jogos em 9 dias) via debug
-                if not fx:
-                    dbg = fd_day_debug(day)
-                    counts = fd_day_counts(day)
-                    api_matches = dbg.get("api_matches", -1)
-                    monitored = dbg.get("monitored_matches", -1)
-                    # 0 absoluto numa janela de 9 dias com ~10 ligas = falha, não calendário
-                    if api_matches == 0 or (api_matches == -1 and not counts):
-                        last_error = f"fd retornou 0 jogos na janela (api_matches=0) — falha"
-                        # continua para fallback
-                    else:
-                        # dia sem rodada genuíno: retorna vazio, sem fallback para demo
-                        return fx, "fd", {"tried": tried, "used": "fd", "fallback": False, "reason": "dia sem rodada"}
-                else:
-                    return fx, "fd", {"tried": tried, "used": "fd", "fallback": False}
-            except ProviderError as e:
-                last_error = str(e)
-                # continua para fallback
-
-    # 1b) primário: af
-    elif primary == "af":
-        if not af_key:
-            tried.append("af: no-key")
-        else:
-            tried.append("af")
-            try:
-                fx = await af_fixtures(af_key, day)
-                if fx:
-                    return fx, "af", {"tried": tried, "used": "af", "fallback": False}
-                else:
-                    # af retornou vazio: pode ser dia sem rodada, retorna vazio
-                    return fx, "af", {"tried": tried, "used": "af", "fallback": False, "reason": "dia sem rodada"}
-            except ProviderError as e:
-                last_error = str(e)
-
-    elif primary == "demo":
-        tried.append("demo")
-        return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": False}
-
-    # 2) fallback OpenLigaDB (sem chave, sem cota)
-    tried.append("openliga")
-    try:
-        fx = await openliga_fixtures(day)
-        if fx:
-            return fx, "openliga", {"tried": tried, "used": "openliga", "fallback": True, "reason": last_error or "fd vazio, usando openliga"}
-        # se openliga retornou vazio genuíno, tenta ESPN
-    except ProviderError as e:
-        last_error = str(e)
-
-    # 3) fallback ESPN (sem chave, cobre Brasileirão)
-    tried.append("espn")
-    try:
-        fx = await espn_fixtures(day)
-        if fx:
-            return fx, "espn", {"tried": tried, "used": "espn", "fallback": True, "reason": last_error or "fd/openliga vazios, usando espn"}
-    except ProviderError as e:
-        last_error = str(e)
-
-    # 4) Se chegou aqui, todas as fontes reais falharam por erro OU retornaram vazio genuíno
-    # Se foi erro, último recurso é demo (para nunca quebrar). Se foi vazio genuíno, retorna vazio.
-    # Distingue pelos tried: se tentamos fd e ele tinha day_counts ou debug com jogos, é vazio genuíno.
-    if primary == "fd" and fd_token:
-        dbg = fd_day_debug(day)
-        counts = fd_day_counts(day)
-        if dbg.get("api_matches", 0) > 0 or counts:
-            # dia sem rodada genuíno nas ligas monitoradas
-            return [], "fd", {"tried": tried, "used": "fd", "fallback": False, "reason": "dia sem rodada, sem fallback demo"}
-
-    # Todas falharam por erro de rede/token: último recurso demo (antes mostrava fake sem aviso, agora com aviso claro)
-    tried.append("demo")
-    return demo_fixtures(day), "demo", {"tried": tried, "used": "demo", "fallback": True, "reason": last_error or "todas as fontes reais falharam"}
-
-
-# ---------------------------------------------------------------- demo
-_DEMO_TEAMS = [
-    ("Flamengo", 1.9, 0.9), ("Palmeiras", 1.8, 0.8), ("Botafogo", 1.5, 1.0),
-    ("São Paulo", 1.3, 1.0), ("Internacional", 1.4, 1.1), ("Cruzeiro", 1.5, 0.9),
-    ("Bahia", 1.3, 1.2), ("Fortaleza", 1.1, 1.3), ("Manchester City", 2.1, 0.9),
-    ("Arsenal", 1.8, 0.7), ("Liverpool", 2.0, 1.0), ("Barcelona", 2.2, 1.1),
-    ("Real Madrid", 2.0, 0.9), ("Bayern", 2.3, 1.0), ("Inter de Milão", 1.9, 0.8),
-    ("PSG", 2.1, 0.9),
-]
-_DEMO_LEAGUES = ["Brasileirão Série A", "Premier League", "La Liga", "Champions League"]
-
-
-def _demo_games(rng: random.Random, atk: float, deff: float):
-    games = []
-    for k in range(14):
-        is_home = rng.random() < 0.5
-        base_for = atk * (1.15 if is_home else 0.9)
-        base_ag = deff * (0.9 if is_home else 1.15)
-        gf = min(rng.poissonvariate(base_for) if hasattr(rng, "poissonvariate") else _pois(rng, base_for), 6)
-        ga = min(_pois(rng, base_ag), 6)
-        games.append([4 + k * 6 + rng.randint(0, 3), is_home, gf, ga])
-    return games
-
-
-def _pois(rng: random.Random, lam: float) -> int:
-    import math
-    L = math.exp(-lam)
-    k, p = 0, 1.0
-    while True:
-        p *= rng.random()
-        if p <= L:
-            return k
-        k += 1
-
-
-def demo_fixtures(day: str):
-    rng = random.Random(day)
-    teams = _DEMO_TEAMS[:]
-    rng.shuffle(teams)
-    out = []
-    n = 6
-    for i in range(n):
-        h, a = teams[i * 2], teams[i * 2 + 1]
-        hour = rng.choice([16, 18, 19, 21])
-        out.append({
-            "id": f"demo-{day}-{i}",
-            "provider": "demo",
-            "league": rng.choice(_DEMO_LEAGUES),
-            "kickoff_utc": f"{day}T{hour:02d}:00:00Z",
-            "status": "SCHEDULED",
-            "home": {"id": 1000 + i * 2, "name": h[0], "_atk": h[1], "_def": h[2]},
-            "away": {"id": 1001 + i * 2, "name": a[0], "_atk": a[1], "_def": a[2]},
+    end = _now_ms()
+    start = end - days * 86400 * 1000
+    async with httpx.AsyncClient() as client:
+        res = await dr_rpc(client, "public/get_volatility_index_data", {
+            "currency": ccy, "resolution": resolution,
+            "start_timestamp": start, "end_timestamp": end,
         })
+    data = (res or {}).get("data") or []
+    out = []
+    for row in data:
+        if len(row) < 5:
+            continue
+        out.append({"ts": int(row[0]), "o": _f(row[1]), "h": _f(row[2]),
+                    "l": _f(row[3]), "c": _f(row[4])})
     return out
 
 
-def demo_team_recent(day: str, team: dict):
-    rng = random.Random(f"{day}-{team['name']}")
-    return _demo_games(rng, team.get("_atk", 1.4), team.get("_def", 1.1))
+async def dr_hv(ccy: str = "BTC") -> list[dict]:
+    """Volatilidade histórica publicada pela Deribit (janela curta, ~semanas).
+
+    Não é a fonte principal de RV — serve de conferência cruzada contra a RV
+    que o SigmaDesk calcula a partir do OHLCV. Devolve pontos repetidos:
+    deduplicados aqui.
+    """
+    async with httpx.AsyncClient() as client:
+        rows = await dr_rpc(client, "public/get_historical_volatility", {"currency": ccy})
+    seen, out = set(), []
+    for row in rows or []:
+        if len(row) < 2:
+            continue
+        ts = int(row[0])
+        if ts in seen:
+            continue
+        seen.add(ts)
+        out.append({"ts": ts, "hv": _f(row[1])})
+    return out
 
 
-def demo_odds(fixture_id: str, fair: dict):
-    """Odds de mercado simuladas: fair odds com margem de casa (~5%) e ruído."""
-    rng = random.Random(fixture_id)
-    odds = {}
-    for mk, fo in fair.items():
-        # margem média de 5% com dispersão entre casas: às vezes a melhor odd
-        # do mercado supera a justa (é exatamente aí que existe valor real)
-        noise = rng.uniform(0.94, 1.10)
-        odds[mk] = round(max(fo * 0.95 * noise, 1.01), 2)
-    return odds
+async def dr_ohlcv(ccy: str = "BTC", resolution: str = "1D",
+                   days: int = 400) -> list[dict]:
+    """OHLCV da própria Deribit (descoberta 5) — mesmo provedor, sem risco geo."""
+    end = _now_ms()
+    start = end - days * 86400 * 1000
+    async with httpx.AsyncClient() as client:
+        res = await dr_rpc(client, "public/get_tradingview_chart_data", {
+            "instrument_name": DERIBIT_INDEX.get(ccy, f"{ccy.lower()}_usd"),
+            "resolution": resolution,
+            "start_timestamp": start, "end_timestamp": end,
+        })
+    res = res or {}
+    ticks = res.get("ticks") or []
+    o, h, l, c = (res.get("open") or [], res.get("high") or [],
+                  res.get("low") or [], res.get("close") or [])
+    v = res.get("volume") or []
+    n = min(len(ticks), len(o), len(h), len(l), len(c))
+    out = [_candle(ticks[i], o[i], h[i], l[i], c[i], v[i] if i < len(v) else 0.0)
+           for i in range(n)]
+    out.sort(key=lambda x: x["ts"])
+    return out
+
+
+async def dr_funding(ccy: str = "BTC", days: int = 120) -> list[dict]:
+    """Funding do perpétuo (segmento B: carry).
+
+    NÃO validado empiricamente na Etapa 0 — implementado de forma defensiva:
+    tolera as formas conhecidas da resposta e devolve [] em vez de explodir.
+    """
+    end = _now_ms()
+    start = end - days * 86400 * 1000
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await dr_rpc(client, "public/get_funding_chart_data", {
+                "instrument_name": DERIBIT_PERP.get(ccy, f"{ccy}-PERPETUAL"),
+                "resolution": "3600",
+                "start_timestamp": start, "end_timestamp": end,
+            })
+    except ProviderError:
+        return []
+    data = (res or {}).get("data") or []
+    out = []
+    for row in data:
+        if len(row) < 3:
+            continue
+        out.append({"ts": int(row[0]), "interest_8h": _f(row[1]),
+                    "funding_8h": _f(row[2])})
+    return out
+
+
+# ------------------------------------------------------------------ COINBASE
+async def cb_candles(ccy: str = "BTC", granularity: int = 86400,
+                     days: int = 300) -> list[dict]:
+    """OHLCV da Coinbase Exchange — sem chave, sem bloqueio geográfico (descoberta 4).
+
+    Duas armadilhas documentadas: a ordem é [time, LOW, HIGH, open, close, vol]
+    e a resposta vem DESCENDENTE. Normalizo para ascendente.
+    A API limita ~300 velas por chamada: para mais, pagina por start/end.
+    """
+    product = COINBASE_PRODUCTS.get(ccy)
+    if not product:
+        raise ProviderError(f"Coinbase sem produto para {ccy}")
+    out: list[dict] = []
+    end = dt.datetime.now(dt.timezone.utc)
+    # pagina para trás: 300 velas por vez
+    per_page = min(300, days)
+    cursor = end
+    remaining = days
+    async with httpx.AsyncClient() as client:
+        while remaining > 0:
+            await _pace("coinbase")
+            start = cursor - dt.timedelta(seconds=per_page * granularity)
+            params = {"granularity": granularity,
+                      "start": start.isoformat(), "end": cursor.isoformat()}
+            try:
+                r = await client.get(f"{CB_BASE}/products/{product}/candles",
+                                     params=params, timeout=TIMEOUT, headers=UA)
+                r.raise_for_status()
+                rows = r.json()
+            except httpx.HTTPStatusError as e:
+                raise ProviderError(f"Coinbase HTTP {e.response.status_code}") from e
+            except (httpx.HTTPError, ValueError) as e:
+                raise ProviderError(f"Coinbase inacessível: {e}") from e
+            if not isinstance(rows, list) or not rows:
+                break
+            for row in rows:
+                if len(row) < 6:
+                    continue
+                t, lo, hi, op, cl, vol = row[:6]
+                out.append(_candle(t, op, hi, lo, cl, vol))
+            cursor = start
+            remaining -= per_page
+            if len(rows) < 2:
+                break
+    # dedup + ordem ascendente
+    dedup = {c["ts"]: c for c in out}
+    res = sorted(dedup.values(), key=lambda c: c["ts"])
+    if not res:
+        raise ProviderError(f"Coinbase devolveu 0 velas para {product}")
+    return res
+
+
+# ------------------------------------------------------------------ KRAKEN
+async def kraken_ohlcv(ccy: str = "BTC", interval: int = 1440,
+                       days: int = 300) -> list[dict]:
+    """Fallback 2: Kraken público, sem chave, sem bloqueio geo."""
+    pair = KRAKEN_PAIRS.get(ccy)
+    if not pair:
+        raise ProviderError(f"Kraken sem par para {ccy}")
+    since = _now_ms() - days * 86400 * 1000
+    await _pace("kraken")
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.get(f"{KR_BASE}/OHLC",
+                                 params={"pair": pair, "interval": interval, "since": since // 1000},
+                                 timeout=TIMEOUT, headers=UA)
+            r.raise_for_status()
+            payload = r.json()
+        except httpx.HTTPStatusError as e:
+            raise ProviderError(f"Kraken HTTP {e.response.status_code}") from e
+        except (httpx.HTTPError, ValueError) as e:
+            raise ProviderError(f"Kraken inacessível: {e}") from e
+    if payload.get("error"):
+        raise ProviderError(f"Kraken: {payload['error']}")
+    result = payload.get("result") or {}
+    key = next((k for k in result if k != "last"), None)
+    rows = result.get(key) or []
+    out = []
+    for row in rows:
+        if len(row) < 7:
+            continue
+        t, op, hi, lo, cl = row[0], row[1], row[2], row[3], row[4]
+        out.append(_candle(t, op, hi, lo, cl, row[6] if len(row) > 6 else 0.0))
+    out.sort(key=lambda c: c["ts"])
+    if not out:
+        raise ProviderError("Kraken devolveu 0 velas")
+    return out
+
+
+# ------------------------------------------------------------------ BINANCE (opcional)
+async def bn_klines(ccy: str = "BTC", interval: str = "1d", days: int = 300,
+                    mirror: bool = True) -> list[dict]:
+    """NÃO entra na cadeia automática (descoberta 4: geo-bloqueada em US).
+
+    Existe como fonte explícita para quem roda fora de região restrita, e tenta
+    o espelho público de dados antes do host principal.
+    """
+    symbol = f"{ccy}USDT"
+    start = _now_ms() - days * 86400 * 1000
+    bases = [BN_MIRROR, BN_BASE] if mirror else [BN_BASE]
+    last_err = None
+    async with httpx.AsyncClient() as client:
+        for base in bases:
+            await _pace("binance")
+            try:
+                r = await client.get(f"{base}/klines",
+                                     params={"symbol": symbol, "interval": interval,
+                                             "startTime": start, "limit": min(days, 1000)},
+                                     timeout=TIMEOUT, headers=UA)
+                r.raise_for_status()
+                rows = r.json()
+                if isinstance(rows, dict) and rows.get("msg"):
+                    raise ProviderError(f"Binance: {rows['msg'][:90]}")
+            except (httpx.HTTPError, ValueError, ProviderError) as e:
+                last_err = e
+                continue
+            out = []
+            for row in rows or []:
+                if len(row) < 8:
+                    continue
+                out.append(_candle(row[0], row[1], row[2], row[3], row[4], row[5]))
+            out.sort(key=lambda c: c["ts"])
+            if out:
+                return out
+            last_err = ProviderError("Binance devolveu 0 velas")
+    raise ProviderError(f"Binance indisponível ({last_err})")
+
+
+# ------------------------------------------------------------------ DEMO
+def demo_seed(ccy: str, salt: int = 0) -> int:
+    """Seed DETERMINÍSTICA derivada da moeda.
+
+    BUG PEGO NA ETAPA 0: o código usava `hash(ccy) & 0xFFFF`. Em CPython o
+    `hash()` de `str` é salgado por processo (PYTHONHASHSEED), então o "modo demo
+    determinístico" gerava uma HISTÓRIA DIFERENTE A CADA RESTART do servidor —
+    medido: o close de 30 dias atrás saía 78.673 num processo e 92.535 noutro.
+    Isso quebra reprodutibilidade, invalida cache, faz o painel mostrar números
+    que mudam sem o mercado ter mudado, e impede comparar teste entre processos.
+    Só apareceu ao rodar a mesma função em dois processos separados.
+    """
+    return (sum((i + 1) * ord(ch) for i, ch in enumerate(ccy.upper())) + salt) & 0xFFFF
+
+
+def demo_candles(ccy: str = "BTC", days: int = 400, seed: int | None = None) -> list[dict]:
+    """OHLCV sintético determinístico, ancorado no último valor REAL capturado.
+
+    Âncoras reais de 26/set/2026: BTC 84.003 (Coinbase e Deribit concordando em
+    21 centavos). Serve para desenvolver o painel e para o app nunca ficar sem
+    dados — sempre rotulado `demo` na tela, como era no FutAnalytics.
+    """
+    rnd = _Lcg(seed if seed is not None else demo_seed(ccy))
+    spot = 84003.06 if ccy == "BTC" else 3200.0
+    # ann_vol é a vol do GERADOR; a RV medida sai um pouco diferente porque os
+    # estimadores de amplitude (Parkinson/GK/YZ) capturam o high-low, que aqui é
+    # alargado artificialmente. Com 0,42 o blend media 47,5% contra uma RV REAL de
+    # 39,18% (26/set/2026) — o demo fingia um mercado 8 pontos mais volátil.
+    # Varrido empiricamente com a seed determinística: 0,363 -> RV 39,1%.
+    # ETH não foi capturado: 0,55 é estimativa, não medição.
+    ann_vol = 0.363 if ccy == "BTC" else 0.55
+    day_vol = ann_vol / math.sqrt(365)
+    now = dt.datetime.now(dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = []
+    price = spot * math.exp(-0.15 * (days / 365))   # parte de trás no tempo
+    for i in range(days):
+        d = now - dt.timedelta(days=days - 1 - i)
+        drift = 0.15 / 365
+        shock = day_vol * rnd.normal()
+        o = price
+        c = o * math.exp(drift + shock)
+        hi = max(o, c) * (1 + abs(rnd.normal()) * day_vol * 0.55)
+        lo = min(o, c) * (1 - abs(rnd.normal()) * day_vol * 0.55)
+        vol = spot * 0.02 * (0.4 + rnd.uniform())
+        out.append({"ts": int(d.timestamp() * 1000), "o": round(o, 2), "h": round(hi, 2),
+                    "l": round(lo, 2), "c": round(c, 2), "v": round(vol, 4)})
+        price = c
+    # Ancora a série INTEIRA no último close real (BTC 84.003 / ETH 3.200, ambos
+    # de 26/set/2026). Escala uniforme preserva a coerência OHLC; a versão
+    # anterior escalava só a última vela e deixava `o` fora da escala, o que
+    # podia produzir open > high. Bug pego pela validação da Etapa 0.
+    if out and out[-1]["c"]:
+        k = spot / out[-1]["c"]
+        out = [{"ts": c["ts"], "o": c["o"] * k, "h": c["h"] * k,
+                "l": c["l"] * k, "c": c["c"] * k, "v": c["v"]} for c in out]
+    for c in out:
+        c["o"] = round(c["o"], 2); c["c"] = round(c["c"], 2)
+        # o arredondamento pode violar o invariante em 1 centavo — repara
+        c["h"] = round(max(c["h"], c["o"], c["c"]), 2)
+        c["l"] = round(min(c["l"], c["o"], c["c"]), 2)
+    return out
+
+
+def deribit_expiry_code(d: dt.date) -> str:
+    """date(2026,10,9) -> '9OCT26'   (SEM zero à esquerda no dia)
+
+    A Deribit não zero-pads o dia: 9OCT26, 3OCT26, 1AUG26. `strftime('%d%b%y')`
+    produz '09OCT26' — que o parser antigo aceitava e a exchange nunca emite.
+    O demo gerava nomes que SÓ o demo sabia ler, então o bug do dia de 1 dígito
+    passou ileso por qualquer teste que usasse dado sintético. Foi preciso dado
+    real para pegá-lo. Regra que fica: o modo demo emite a MESMA convenião da
+    exchange, senão ele não valida nada — só valida a si mesmo.
+    """
+    return f"{d.day}{dt.datetime(d.year, d.month, 1).strftime('%b').upper()}{d.year % 100:02d}"
+
+
+def demo_chain(ccy: str = "BTC", seed: int | None = None) -> list[dict]:
+    """Superfície sintética com sorriso, skew e estrutura a termo realistas.
+
+    ÂNCORAS REAIS capturadas em 26/set/2026 (BTC):
+      spot 84.003,06 (Coinbase ≈ estimated_delivery_price da Deribit, Δ 21¢)
+      DVOL oficial 34,88 · IV 30d interpolada da cadeia 35,38 (Δ 0,50 pt)
+      RV 30d realizada 39,18 · VRP = −3,8 pts (NEGATIVO: IV abaixo da RV)
+      estrutura a termo real: 1,5d→18,69 · 12,5d→32,27 · 19,5d→33,22 ·
+                              33,5d→35,78 · 61,5d→49,22
+      forward por vencimento: 84.022 / 84.376 / 85.052 / 86.084 / 88.318
+
+    ETH NÃO foi capturado — as âncoras de ETH abaixo são estimativa, não medição,
+    e estão marcadas como tal. Não trate número de ETH do demo como observado.
+    """
+    rnd = _Lcg(seed if seed is not None else demo_seed(ccy, salt=7))
+    spot = 84003.06 if ccy == "BTC" else 3200.0
+    # term(30d) = atm * (1 + 0.18*exp(-30/20)) = atm * 1.0408; com atm=34.0 isso
+    # devolve 35,4% em 30 dias — a IV interpolada REAL de 26/set/2026 (35,38%).
+    atm = 34.0 if ccy == "BTC" else 42.0
+    carry = 0.0012 if ccy == "BTC" else 0.0008      # por dia, contango observado
+    expiries = []
+    now = dt.datetime.now(dt.timezone.utc)
+    for dte in (2, 7, 14, 30, 60, 90, 180):
+        expiries.append((now + dt.timedelta(days=dte)).date())
+    out = []
+    for exp in expiries:
+        dte = max(1, (exp - now.date()).days)
+        fwd = spot * math.exp(carry * dte)
+        # estrutura a termo de vol: curto mais alto (prêmio de evento) + mean reversion
+        term = atm * (1.0 + 0.18 * math.exp(-dte / 20.0))
+        strikes = _strike_ladder(spot, ccy, n=13)
+        for k in strikes:
+            moneyness = math.log(k / fwd)
+            # skew: put mais caro que call; sorriso convexo
+            skew = -6.5 * moneyness
+            smile = 26.0 * moneyness * moneyness * math.sqrt(max(dte, 1) / 30.0)
+            iv = max(8.0, term + skew + smile + rnd.normal() * 0.6)
+            for opt in ("C", "P"):
+                iv_o = iv + (0.4 if opt == "P" else -0.4)
+                oi = max(0.0, rnd.uniform() * 400 * math.exp(-abs(moneyness) * 3))
+                deep = abs(moneyness) > 0.55
+                bid = None if deep or oi < MIN_OI else 0.01
+                ask = None if deep else 0.012
+                out.append({
+                    "instrument": f"{ccy}-{deribit_expiry_code(exp)}-{int(k)}-{opt}",
+                    "ccy": ccy, "settlement": "coin",
+                    "expiry": exp.isoformat(), "strike": k, "kind": opt,
+                    "dte": round(dte, 3),
+                    "mark_iv": round(iv_o, 3),
+                    "bid": bid, "ask": ask,
+                    "mid": (round((bid + ask) / 2, 4) if bid is not None and ask is not None else None),
+                    "spread_pct": (0.2 if bid and ask else None),
+                    "mark_price": round(max(1e-5, iv_o / 100 * math.sqrt(dte / 365) * 0.4 * spot / k), 5),
+                    "last": None, "oi": round(oi, 1),
+                    "volume": round(rnd.uniform() * 20, 2),
+                    "volume_usd": round(rnd.uniform() * 90000, 2),
+                    "underlying_price": round(fwd, 2),
+                    "underlying_index": f"{ccy}-{deribit_expiry_code(exp)}",
+                    "liquid": bool(bid is not None and ask is not None and oi >= MIN_OI),
+                })
+    out.sort(key=lambda o: (o["expiry"], o["strike"], o["kind"]))
+    return out
+
+
+def demo_dvol(ccy: str = "BTC", days: int = 400) -> list[dict]:
+    """DVOL sintético ancorado na série REAL capturada (2024: faixa 41–85;
+    set/2026: ATM ~18,7). Usa a série real de 2024 como forma e reancora o nível."""
+    base = [66.81, 63.75, 65.17, 65.34, 67.64, 71.39, 71.81, 67.16, 64.17, 62.7,
+            57.3, 57.42, 55.07, 56.87, 55.96, 55.16, 50.79, 48.31, 48.04, 47.96,
+            47.82, 48.98, 49.59, 47.54, 45.01, 43.73, 42.43, 45.25, 45.36, 46.91,
+            45.79, 44.76, 42.41, 41.52, 42.69, 42.37, 42.87, 43.82, 44.91, 47.79,
+            49.91, 51.29, 54.28, 52.19, 55.13, 55.08, 55.24, 56.24, 57.24, 56.83,
+            55.63, 54.01, 55.38, 52.23, 54.18, 55.17, 56.05, 58.36, 67.76, 65.54,
+            65.37, 65.82, 71.72, 74.81, 73.19, 74.85, 69.68, 71.87, 75.04, 80.12,
+            83.02, 78.08, 77.5, 74.58, 76.7, 75.73, 75.93, 74.08, 76.61, 77.73,
+            75.26, 72.46, 73.68, 72.62, 76.25, 75.39, 75.78, 76.53, 73.11, 74.93,
+            76.64, 73.81, 74.37, 72.45, 72.31, 71.96, 72.3, 77.43, 76.25, 73.69,
+            72.32, 68.42, 66.94, 72.95, 71.99, 70.48, 70.88, 70.72, 69.98, 70.4,
+            71.98, 72.05, 72.05, 69.37, 64.16, 62.44, 59.29, 55.12, 54.69, 56.79,
+            55.33, 59.81, 61.22, 56.77, 55.88, 56.89, 58.65, 55.57, 53.76, 55.43,
+            52.17, 54.27, 54.17, 54.52, 56.13, 56.23, 58.61, 57.49, 55.26, 56.67,
+            57.32, 61.94, 58.59, 56.8, 53.18, 52.29, 52.21, 53.73, 53.91, 54.76,
+            53.24, 53.27, 51.99, 50.68, 51.11, 52.77, 53.95, 55.62, 51.87, 50.02,
+            50.34, 51.79, 50.88, 52.49, 50.56, 49.23, 48.56, 48.03, 47.9, 48.81,
+            50.06, 48.6, 48.28, 47.11, 46.43, 48.23, 50.96, 48.14, 47.05, 47.94,
+            45.4, 43.47, 45.44, 44.71, 42.33, 45.36, 47.53, 48.98, 48.21, 50.99,
+            51.03, 50.05, 48.69, 48.54, 46.32, 49.18, 49.3, 54.52, 56.49, 58.28]
+    # ÂNCORA REAL: DVOL BTC oficial em 26/set/2026 = 34,88 (série jun–set/2026:
+    # mín 33,59 · máx 49,37 · média 38,97). O valor anterior aqui era 19,0 — uma
+    # anotação ERRADA minha ("ATM ~18,7") que nunca foi confrontada com o índice
+    # oficial. O demo estava gerando um mercado de vol 16 pontos mais barato que
+    # o real, o que faria qualquer teste de VRP sobre o demo mentir.
+    # ETH: não capturado -> estimativa, não medição.
+    target = 34.88 if ccy == "BTC" else 41.0
+    now = dt.datetime.now(dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = []
+    for i in range(days):
+        v = base[i % len(base)]
+        # reancora o nível médio da série real de 2024 para o nível atual
+        level = target * (v / 60.0) ** 0.65
+        d = now - dt.timedelta(days=days - 1 - i)
+        out.append({"ts": int(d.timestamp() * 1000), "o": round(level, 2),
+                    "h": round(level * 1.03, 2), "l": round(level * 0.97, 2),
+                    "c": round(level, 2)})
+    return out
+
+
+def _strike_ladder(spot: float, ccy: str, n: int = 13) -> list[float]:
+    step = 1000.0 if ccy == "BTC" else 50.0
+    center = round(spot / step) * step
+    half = n // 2
+    out = []
+    for i in range(-half, half + 1):
+        k = center + i * step
+        if i in (-half, half):
+            k = center + i * step * 2.5      # asas mais largas
+        if k > 0:
+            out.append(round(k / step) * step)
+    return sorted(set(out))
+
+
+class _Lcg:
+    """Gerador determinístico minúsculo (sem numpy, sem random global)."""
+
+    def __init__(self, seed: int = 42):
+        self.s = (int(seed) * 1103515245 + 12345) & 0x7FFFFFFF or 1
+
+    def _next(self) -> float:
+        self.s = (self.s * 1103515245 + 12345) & 0x7FFFFFFF
+        return self.s / 0x7FFFFFFF
+
+    def uniform(self) -> float:
+        return self._next()
+
+    def normal(self) -> float:
+        u1 = max(self._next(), 1e-9)
+        u2 = self._next()
+        return math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2)
+
+
+# ------------------------------------------------------------------ fallback
+async def candles_with_fallback(ccy: str = "BTC", days: int = 400,
+                                force: str | None = None
+                                ) -> tuple[list[dict], str, dict]:
+    """OHLCV com cadeia de fallback (herdeiro de `fixtures_with_fallback`).
+
+    `deribit -> coinbase -> kraken -> demo`. Devolve (velas, fonte, diagnóstico).
+    Nunca levanta: o painel precisa distinguir FALHA de VAZIO, como a v2.4.1
+    do FutAnalytics aprendeu do jeito difícil.
+    """
+    debug: dict = {"asked": [], "errors": {}}
+    order = ["deribit", "coinbase", "kraken"]
+    if force:
+        order = [force] + [p for p in order if p != force]
+    for src in order:
+        debug["asked"].append(src)
+        try:
+            if src == "deribit":
+                data = await dr_ohlcv(ccy, "1D", days)
+            elif src == "coinbase":
+                data = await cb_candles(ccy, 86400, days)
+            else:
+                data = await kraken_ohlcv(ccy, 1440, days)
+            if data and len(data) >= 30:
+                debug["used"] = src
+                debug["n"] = len(data)
+                return data, src, debug
+            debug["errors"][src] = f"resposta curta ({len(data or [])} velas)"
+        except ProviderError as e:
+            debug["errors"][src] = str(e)
+        except Exception as e:                       # nunca derruba o painel
+            debug["errors"][src] = f"{type(e).__name__}: {e}"
+    debug["used"] = "demo"
+    data = demo_candles(ccy, days)
+    debug["n"] = len(data)
+    debug["demo_reason"] = "todas as fontes reais falharam"
+    return data, "demo", debug
+
+
+async def chain_with_fallback(ccy: str = "BTC") -> tuple[list[dict], str, dict]:
+    """Superfície de opções: Deribit é a ÚNICA fonte real gratuita de IV.
+
+    Sem Deribit não existe superfície — então aqui o fallback é honesto:
+    devolve demo com aviso explícito, nunca finge que é preço de mercado.
+    """
+    debug: dict = {"asked": ["deribit"], "errors": {}}
+    try:
+        data = await dr_option_chain(ccy)
+        debug["used"] = "deribit"
+        debug["n"] = len(data)
+        debug["n_liquid"] = sum(1 for o in data if o["liquid"])
+        return data, "deribit", debug
+    except ProviderError as e:
+        debug["errors"]["deribit"] = str(e)
+    except Exception as e:
+        debug["errors"]["deribit"] = f"{type(e).__name__}: {e}"
+    debug["used"] = "demo"
+    data = demo_chain(ccy)
+    debug["n"] = len(data)
+    debug["n_liquid"] = sum(1 for o in data if o["liquid"])
+    debug["demo_reason"] = "Deribit indisponível — IV sintética, NÃO é preço de mercado"
+    return data, "demo", debug
+
+
+async def dvol_with_fallback(ccy: str = "BTC", days: int = 400
+                             ) -> tuple[list[dict], str, dict]:
+    debug: dict = {"asked": ["deribit"], "errors": {}}
+    try:
+        data = await dr_dvol(ccy, 86400, days)
+        if data:
+            debug["used"] = "deribit"
+            debug["n"] = len(data)
+            debug["first_ts"] = data[0]["ts"]
+            return data, "deribit", debug
+        debug["errors"]["deribit"] = "série vazia"
+    except ProviderError as e:
+        debug["errors"]["deribit"] = str(e)
+    except Exception as e:
+        debug["errors"]["deribit"] = f"{type(e).__name__}: {e}"
+    debug["used"] = "demo"
+    data = demo_dvol(ccy, days)
+    debug["n"] = len(data)
+    return data, "demo", debug
+
+
+# ------------------------------------------------------------------ diagnóstico
+async def status(which: str = "all", ccy: str = "BTC") -> dict:
+    """Testa provedores individualmente — alimenta /api/test-provider e o painel."""
+    out: dict = {}
+    if which in ("all", "deribit"):
+        t0 = time.monotonic()
+        try:
+            async with httpx.AsyncClient() as client:
+                await dr_rpc(client, "public/get_time", {})
+            out["deribit_time"] = {"ok": True, "ms": round((time.monotonic() - t0) * 1000)}
+        except ProviderError as e:
+            out["deribit_time"] = {"ok": False, "error": str(e)}
+    if which in ("all", "chain"):
+        t0 = time.monotonic()
+        try:
+            ch = await dr_option_chain(ccy)
+            ivs = [o["mark_iv"] for o in ch if o["mark_iv"] and o["liquid"]]
+            out["deribit_chain"] = {
+                "ok": True, "n": len(ch), "n_liquid": sum(1 for o in ch if o["liquid"]),
+                "iv_min": round(min(ivs), 2) if ivs else None,
+                "iv_max": round(max(ivs), 2) if ivs else None,
+                "expiries": len({o["expiry"] for o in ch}),
+                "ms": round((time.monotonic() - t0) * 1000),
+            }
+        except ProviderError as e:
+            out["deribit_chain"] = {"ok": False, "error": str(e)}
+    if which in ("all", "coinbase"):
+        t0 = time.monotonic()
+        try:
+            c = await cb_candles(ccy, 86400, 60)
+            out["coinbase"] = {"ok": True, "n": len(c), "last_close": c[-1]["c"],
+                               "ms": round((time.monotonic() - t0) * 1000)}
+        except ProviderError as e:
+            out["coinbase"] = {"ok": False, "error": str(e)}
+    if which in ("all", "kraken"):
+        t0 = time.monotonic()
+        try:
+            k = await kraken_ohlcv(ccy, 1440, 60)
+            out["kraken"] = {"ok": True, "n": len(k), "last_close": k[-1]["c"],
+                             "ms": round((time.monotonic() - t0) * 1000)}
+        except ProviderError as e:
+            out["kraken"] = {"ok": False, "error": str(e)}
+    if which in ("all", "binance"):
+        t0 = time.monotonic()
+        try:
+            b = await bn_klines(ccy, "1d", 60)
+            out["binance"] = {"ok": True, "n": len(b), "last_close": b[-1]["c"],
+                              "ms": round((time.monotonic() - t0) * 1000)}
+        except ProviderError as e:
+            out["binance"] = {"ok": False, "error": str(e),
+                              "note": "esperado falhar em IP de região restrita (Render = EUA)"}
+    return out
+
+
+PROVIDER_LABELS = {
+    "deribit": "Deribit (superfície de IV + OHLCV)",
+    "coinbase": "Coinbase Exchange (OHLCV, sem bloqueio geo)",
+    "kraken": "Kraken (OHLCV, fallback 2)",
+    "binance": "Binance (opcional — geo-bloqueada em IP dos EUA)",
+    "demo": "Demonstração (sintético ancorado em dados reais)",
+}

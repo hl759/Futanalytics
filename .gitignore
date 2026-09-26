@@ -1,6 +1,20 @@
-# banco local e caches NÃO sobem para o Git/Render (depois do deploy, o app recria)
+# Banco local e caches NÃO sobem para o Git/Render: o app recria no boot.
+# O disco do Render free é efêmero — persistência de verdade é /api/backup.
+*.db
+sigmadesk.db
 futanalytics.db
 data_cache/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# SO / editor
+.DS_Store
+*.swp

@@ -1,690 +1,600 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FutAnalytics · Análise diária de futebol</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SigmaDesk — inteligência de volatilidade</title>
 <style>
 :root{
-  --bg:#0b1120; --bg2:#111a2e; --card:#16223a; --card2:#1c2b48;
-  --line:#24344f; --txt:#e6edf7; --mut:#8fa3c0; --green:#2fd48a;
-  --green-d:#0f3b2a; --amber:#f5b942; --red:#f06a6a; --blue:#5aa2ff;
-  --radius:14px;
+  --bg:#0b0f14; --panel:#121922; --panel2:#18212c; --line:#22303d;
+  --txt:#e6edf3; --mut:#8b9aa8; --acc:#4aa8ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
-a{color:var(--blue)}
-header{position:sticky;top:0;z-index:50;background:rgba(11,17,32,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
-.hwrap{max-width:1180px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.logo{font-size:19px;font-weight:800;letter-spacing:.3px}
-.logo span{color:var(--green)}
-nav{display:flex;gap:4px;flex-wrap:wrap}
-nav button{background:none;border:none;color:var(--mut);font:600 14px inherit;padding:8px 14px;border-radius:9px;cursor:pointer}
-nav button.active{background:var(--card2);color:var(--txt)}
-nav button:hover{color:var(--txt)}
-.bank{margin-left:auto;font-size:13px;color:var(--mut)}
-.bank b{color:var(--green);font-size:15px}
-main{max-width:1180px;margin:0 auto;padding:24px 20px 80px}
-h2{font-size:20px;margin-bottom:4px}
-.sub{color:var(--mut);font-size:13.5px;margin-bottom:18px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
-.grid{display:grid;gap:16px}
-@media(min-width:900px){.grid.two{grid-template-columns:1fr 1fr}}
-.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:700;letter-spacing:.4px}
-.pill.green{background:var(--green-d);color:var(--green)}
-.pill.amber{background:#3d2f12;color:var(--amber)}
-.pill.blue{background:#14304f;color:var(--blue)}
-.pill.red{background:#3d1a1a;color:var(--red)}
-.pill.gray{background:#23304a;color:var(--mut)}
-.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.spacer{flex:1}
-.matchcard{border:1px solid var(--line);border-radius:var(--radius);background:var(--card);overflow:hidden;margin-bottom:14px}
-.matchcard.best{border-color:var(--green);box-shadow:0 0 0 1px var(--green)}
-.mhead{padding:14px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--bg2)}
-.teams{font-size:16.5px;font-weight:700}
-.mbody{padding:16px 18px;display:grid;gap:14px}
-@media(min-width:840px){.mbody{grid-template-columns:1.2fr 1fr 1fr}}
-.stat{font-size:13px;color:var(--mut)}
-.stat b{color:var(--txt);font-weight:700}
-.bigpick{background:var(--card2);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
-.bigpick .lab{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;font-weight:700}
-.bigpick .val{font-size:16px;font-weight:800;margin-top:2px}
-.bar{height:7px;background:#233049;border-radius:99px;overflow:hidden;margin-top:6px}
-.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:99px}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{color:var(--mut);text-align:left;font-weight:600;padding:7px 8px;border-bottom:1px solid var(--line);font-size:12px;text-transform:uppercase;letter-spacing:.4px}
-td{padding:8px;border-bottom:1px solid #1d2a44}
-tr:last-child td{border-bottom:none}
-.num{text-align:right;font-variant-numeric:tabular-nums}
-button.btn{background:var(--green);color:#06281a;border:none;font:700 13.5px inherit;padding:9px 16px;border-radius:9px;cursor:pointer}
-button.btn:hover{filter:brightness(1.08)}
-button.btn.ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
-button.btn.sm{padding:5px 11px;font-size:12.5px}
-button.btn.red{background:#4a2020;color:var(--red)}
-button.btn.blue{background:#173a63;color:var(--blue)}
-input,select{background:var(--bg2);border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:9px 12px;font:14px inherit;width:100%}
-label{font-size:12.5px;color:var(--mut);font-weight:600;display:block;margin-bottom:5px}
-.field{margin-bottom:14px}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.kpi .k{font-size:12px;color:var(--mut);font-weight:600}
-.kpi .v{font-size:21px;font-weight:800;margin-top:2px}
-.v.pos{color:var(--green)}.v.neg{color:var(--red)}
-.empty{color:var(--mut);text-align:center;padding:40px 10px;font-size:14px}
-.loading{text-align:center;padding:60px 0;color:var(--mut)}
-.spin{display:inline-block;width:26px;height:26px;border:3px solid var(--line);border-top-color:var(--green);border-radius:50%;animation:sp 0.8s linear infinite;margin-bottom:10px}
-@keyframes sp{to{transform:rotate(360deg)}}
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--card2);border:1px solid var(--green);color:var(--txt);padding:11px 20px;border-radius:11px;font-size:14px;z-index:99;box-shadow:0 8px 30px rgba(0,0,0,.5)}
-.warn{background:#2d2413;border:1px solid #5c4a1e;color:#f0d48a;border-radius:11px;padding:12px 16px;font-size:13.5px;margin-bottom:16px}
-.method h3{margin:18px 0 6px;font-size:16px}
-.method p,.method li{color:#c7d4e8;font-size:14px;margin-bottom:8px}
-.method ul{padding-left:22px}
-.legrow{display:flex;gap:10px;align-items:baseline;padding:9px 0;border-bottom:1px solid #1d2a44;font-size:14px;flex-wrap:wrap}
-.legrow:last-child{border-bottom:none}
-.datebar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
-.datebar input{width:auto}
-.oddtag{font-variant-numeric:tabular-nums;font-weight:800;color:var(--amber)}
-.small{font-size:12.5px;color:var(--mut)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+a{color:var(--acc)}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 16px 60px}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;
+  border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}
+h1{font-size:22px;margin:0;letter-spacing:-.3px}
+h1 .sig{color:var(--acc)}
+.sub{color:var(--mut);font-size:12.5px}
+.badge{font:600 10.5px/1 var(--mono);padding:5px 8px;border-radius:20px;
+  border:1px solid var(--line);background:var(--panel2);color:var(--mut)}
+.badge.etapa{border-color:#2d5a8a;color:#8fc4ff;background:#12222f}
+h2{font-size:14px;margin:26px 0 10px;text-transform:uppercase;letter-spacing:.9px;color:var(--mut)}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.g4{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.card h3{margin:0 0 10px;font-size:13px;letter-spacing:.2px;display:flex;
+  justify-content:space-between;align-items:center;gap:8px}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:4px 0;
+  border-bottom:1px dotted #1c2833;font-size:13px}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--mut)}
+.kv .v{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.big{font:600 26px/1.1 var(--mono);letter-spacing:-1px}
+.lbl{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}
+.pill{font:600 10.5px/1 var(--mono);padding:4px 7px;border-radius:20px;white-space:nowrap}
+.p-ok{background:#0f2a17;color:var(--ok);border:1px solid #1d4a2a}
+.p-warn{background:#2b2410;color:var(--warn);border:1px solid #4d3f18}
+.p-bad{background:#2d1416;color:var(--bad);border:1px solid #5a2226}
+.p-mut{background:var(--panel2);color:var(--mut);border:1px solid var(--line)}
+.p-acc{background:#12222f;color:#8fc4ff;border:1px solid #2d5a8a}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:var(--mut);font-weight:500;font-size:11px;
+  text-transform:uppercase;letter-spacing:.6px;padding:6px 6px;border-bottom:1px solid var(--line)}
+td{padding:6px;border-bottom:1px solid #18222c;font-family:var(--mono);font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+td.t,th.t{text-align:right}
+button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+  border-radius:7px;padding:7px 12px;font-size:12.5px;cursor:pointer}
+button:hover{border-color:#33475a;background:#1d2833}
+button.pri{background:#12314d;border-color:#2d5a8a;color:#cfe6ff}
+button.dgr{background:#2d1416;border-color:#5a2226;color:#ffb4ae}
+input,select{background:#0d141b;border:1px solid var(--line);color:var(--txt);
+  border-radius:7px;padding:7px 9px;font-size:13px;font-family:var(--mono)}
+input:focus,select:focus{outline:none;border-color:#2d5a8a}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.note{background:#12222f;border:1px solid #2d5a8a;border-radius:8px;padding:11px 13px;
+  font-size:12.5px;color:#bcd8f2}
+.warnbox{background:#2b2410;border:1px solid #4d3f18;border-radius:8px;padding:11px 13px;
+  font-size:12.5px;color:#e8cf9a}
+.bad{background:#2d1416;border:1px solid #5a2226;border-radius:8px;padding:11px 13px;
+  font-size:12.5px;color:#ffb4ae}
+.mut{color:var(--mut);font-size:12px}
+.mono{font-family:var(--mono)}
+.bar{height:7px;border-radius:4px;background:#1b2630;overflow:hidden;margin-top:6px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,#2d5a8a,#4aa8ff)}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid #2d5a8a;
+  border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+.fld{display:flex;flex-direction:column;gap:4px}
+.fld label{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px}
+.fld input{width:100%}
+details{border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:var(--panel)}
+summary{cursor:pointer;font-size:12.5px;color:var(--mut)}
+code{font-family:var(--mono);font-size:12px;background:#0d141b;padding:1px 5px;border-radius:4px}
+footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
+  color:var(--mut);font-size:12px}
+.chk{display:flex;align-items:center;gap:7px}
 </style>
 </head>
 <body>
+<div class="wrap">
+
 <header>
-  <div class="hwrap">
-    <div class="logo">Fut<span>Analytics</span></div>
-    <nav>
-      <button data-tab="day" class="active">Painel do dia</button>
-      <button data-tab="bets">Meus bilhetes</button>
-      <button data-tab="settings">Configurações</button>
-      <button data-tab="method">Metodologia</button>
-    </nav>
-    <div class="bank">Banca: <b id="bankTop">—</b></div>
+  <h1><span class="sig">Σ</span> SigmaDesk</h1>
+  <span class="badge etapa" id="etapa">etapa 0</span>
+  <span class="badge" id="ver">—</span>
+  <span class="sub" id="asof"></span>
+  <div style="flex:1"></div>
+  <div class="row">
+    <button onclick="load(true)">↻ atualizar</button>
+    <button onclick="tab('cfg')">configurações</button>
   </div>
 </header>
-<main>
-  <section id="tab-day">
-    <h2>Painel do dia</h2>
-    <div class="sub">Apenas mercados de gols (Over/Under/BTTS + totais por time). Seleção por <b>equilíbrio acerto × odd</b> com <b>odds reais grátis</b> (Bet365/Pinnacle nas ligas europeias; demais linhas derivadas do consenso — selo <span class="pill amber" style="font-size:10px">derivada</span>) e <b>verificação do trader</b> em cada card. Nada é gravado sozinho: bilhetes só entram quando você clica em registrar.</div>
-    <div class="datebar">
-      <input type="date" id="dayPick">
-      <button class="btn ghost" id="reload">Atualizar análise</button>
-      <span class="small" id="provTag"></span>
-    </div>
-    <div id="dayContent"><div class="loading"><div class="spin"></div><br>Analisando jogos do dia...</div></div>
-  </section>
 
-  <section id="tab-bets" style="display:none">
-    <h2>Meus bilhetes</h2>
-    <div class="sub">Registre resultados para acompanhar taxa de acerto, ROI e evolução da banca. Disciplina de registro é metade do lucro.</div>
-    <div class="kpis" id="betKpis"></div>
-    <div class="card"><div id="betList"></div></div>
-  </section>
+<div id="banner"></div>
 
-  <section id="tab-settings" style="display:none">
-    <h2>Configurações</h2>
-    <div class="sub">Fonte de dados, chaves de API e gestão de banca.</div>
-    <div class="grid two">
-      <div class="card">
-        <h3 style="margin-bottom:12px">Fonte de dados</h3>
-        <div class="field">
-          <label>Provedor</label>
-          <select id="sProvider">
-            <option value="demo">Demonstração (sem chave, dados simulados)</option>
-            <option value="fd">football-data.org (grátis · principal, com fallback automático)</option>
-            <option value="af">API-Football (pago p/ temporada atual · com fallback automático)</option>
-            <option value="openliga">OpenLigaDB (grátis, sem chave · fallback Bundesliga)</option>
-            <option value="espn">ESPN (grátis, sem chave · fallback Brasileirão)</option>
-          </select>
-          <div class="small" style="margin-top:4px">v2.4: fallback automático ativo — se o provedor principal falhar, o app tenta OpenLigaDB → ESPN → demo sozinho. Você nunca fica sem jogos.</div>
-        </div>
-        <div class="field">
-          <label>Token football-data.org (recomendado para jogos de hoje, grátis)</label>
-          <input id="sFd" placeholder="cole o token aqui" autocomplete="off">
-          <div class="small" style="margin-top:4px">Grátis em football-data.org/client/register: o tier gratuito cobre a temporada ATUAL do Brasileirão A, Champions e top 5 ligas da Europa (sem odds; o modelo usa odds justas).</div>
-        </div>
-        <div class="field">
-          <label>Chave API-Football (api-sports.io)</label>
-          <input id="sAf" placeholder="cole a chave aqui" autocomplete="off">
-          <div class="small" style="margin-top:4px">Atenção: o plano gratuito da API-Football hoje só libera temporadas antigas (2021 a 2023), então NÃO serve para os jogos do dia sem plano pago. Use a chave direta do dashboard.api-football.com (não a do RapidAPI). Com plano pago, é a melhor fonte: Série A/B, Copa do Brasil, Libertadores e odds reais.</div>
-        </div>
-        <div class="row" style="gap:8px">
-          <button class="btn" id="saveProvider">Salvar fonte de dados</button>
-          <button class="btn ghost" id="testFd">Testar football-data</button>
-          <button class="btn ghost" id="testAf">Testar API-Football</button>
-          <button class="btn ghost" id="testOl">Testar OpenLigaDB</button>
-          <button class="btn ghost" id="testEspn">Testar ESPN</button>
-        </div>
-        <div id="testResult" style="margin-top:12px"></div>
-      </div>
-      <div class="card">
-        <h3 style="margin-bottom:12px">Gestão de banca</h3>
-        <div class="field"><label>Banca atual (R$)</label><input id="sBank" type="number" step="10"></div>
-        <div class="field"><label>Fração de Kelly (0.1 a 0.5 · recomendado 0.25)</label><input id="sKelly" type="number" step="0.05" min="0.05" max="1"></div>
-        <div class="field"><label>Teto por aposta (% da banca · recomendado 2 a 3%)</label><input id="sCap" type="number" step="0.5" min="0.5" max="10"></div>
-        <div class="field">
-          <label>Como o app escolhe</label>
-          <select id="sPickMode">
-            <option value="balanced">Equilíbrio acerto × odd (recomendado)</option>
-            <option value="prob">Só o mais provável</option>
-            <option value="ev">Valor esperado (EV, para traders)</option>
-          </select>
-        </div>
-        <div class="field"><label>Odd-alvo da múltipla (recomendado 2.5 a 3.0 · o app para de adicionar pernas ao atingir)</label><input id="sTarget" type="number" step="0.1" min="1.6" max="8"></div>
-        <div class="field"><label>Odd mínima de uma perna (abaixo disso só entra sem alternativa · recomendado 1.12)</label><input id="sMinLeg" type="number" step="0.02" min="1.02" max="1.6"></div>
-        <div class="field">
-          <label>Selo mínimo das pernas da múltipla (verificação do trader)</label>
-          <select id="sMinGrade">
-            <option value="B">Selo A ou B (recomendado · perna C NUNCA entra)</option>
-            <option value="A">Só selo A (ultra criterioso · terá dias sem múltipla)</option>
-            <option value="C">Sem filtro de selo (aceita perna C)</option>
-          </select>
-        </div>
-        <div class="field"><label>EV mínimo para recomendar (% · só usado no modo "valor esperado")</label><input id="sEv" type="number" step="0.5"></div>
-        <div class="field"><label>Peso do modelo na mistura com o mercado (% · 100 = só modelo, 0 = só mercado · recomendado 25%)</label><input id="sMw" type="number" step="5" min="0" max="100"></div>
-        <div class="field"><label>Peso do xG sobre gols brutos (% · recomendado 65%; ligas sem xG usam gols + calibração)</label><input id="sXg" type="number" step="5" min="0" max="100"></div>
-        <div class="field">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="sFdOdds" style="width:auto"> Odds reais grátis (Bet365/Pinnacle via football-data.co.uk · recomendado)</label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sCal" style="width:auto"> Calibrar probabilidades (curvas treinadas em temporadas passadas)</label>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px"><input type="checkbox" id="sKellyUnc" style="width:auto"> Kelly com desconto de incerteza (stake menor quando a amostra é curta)</label>
-        </div>
-        <button class="btn" id="saveBank">Salvar gestão</button>
-      </div>
-    </div>
-    <div class="card" style="margin-top:16px">
-      <h3 style="margin-bottom:8px">Backup e restauração</h3>
-      <div class="small" style="margin-bottom:12px">O Render free apaga o disco a cada deploy: <b>baixe um backup antes de atualizar o código</b> e restaure depois. O arquivo inclui banca, bilhetes, CLV e configurações — inclusive suas chaves de API, então guarde-o com cuidado. (No seu computador o banco é local e nada se perde; isso é para quem usa via Render.)</div>
-      <div class="row" style="gap:10px">
-        <button class="btn" id="btnBackup">⬇ Baixar backup</button>
-        <button class="btn ghost" id="btnRestore">⬆ Restaurar de um arquivo…</button>
-        <input type="file" id="fileRestore" accept=".json,application/json" style="display:none">
-        <span class="small" id="restoreInfo"></span>
-      </div>
-    </div>
-  </section>
+<div class="row" style="margin:14px 0 4px">
+  <button class="pri" onclick="tab('radar')">radar de volatilidade</button>
+  <button onclick="tab('surface')">superfície</button>
+  <button onclick="tab('journal')">diário de trades</button>
+  <button onclick="tab('prov')">provedores</button>
+  <button onclick="tab('cfg')">configurações</button>
+  <button onclick="tab('metodo')">metodologia</button>
+</div>
 
-  <section id="tab-method" style="display:none">
-    <h2>Metodologia</h2>
-    <div class="sub">O que o modelo faz, o que ele não faz, e as regras que sustentam consistência no longo prazo.</div>
-    <div class="card method">
-      <h3>1. O princípio que governa tudo: valor esperado</h3>
-      <p>Aposta lucrativa no longo prazo não é a que "parece que vai ganhar", é aquela em que a probabilidade real do evento é maior do que a probabilidade embutida na odd. Se o modelo estima 60% para mais de 2.5 gols e a casa paga 1.85 (que implica 54%), há valor: EV = 0,60 × 1,85 − 1 = +11%. Apostar sistematicamente só quando há valor positivo é a única estratégia matematicamente sustentável. Sem isso, qualquer sequência de greens é sorte com prazo de validade.</p>
-      <h3>2. Como o modelo calcula as probabilidades</h3>
-      <ul>
-        <li>Força de ataque e defesa de cada time, separada em casa e fora, a partir dos jogos recentes com decaimento temporal (o jogo de ontem pesa mais que o de três meses atrás).</li>
-        <li>Regularização bayesiana: com amostra pequena, as forças são puxadas para a média da liga, evitando conclusões extremas a partir de meia dúzia de jogos.</li>
-        <li>Gols esperados de cada lado combinando ataque próprio com defesa adversária e mando de campo.</li>
-        <li>Matriz completa de placares via Poisson com correção de Dixon-Coles, que ajusta a distorção do Poisson puro em placares baixos (0x0, 1x0, 0x1, 1x1).</li>
-        <li>Dessa matriz saem as probabilidades de Over/Under, ambas marcam, 1X2 e dupla chance.</li>
-        <li>As médias de gols de referência são específicas de cada liga, estimadas do histórico recente dos times da própria competição, recuando para a média global quando a amostra é pequena.</li>
-        <li>Quando há odds reais, a probabilidade final é uma mistura entre o modelo e o consenso do mercado (probabilidade implícita nas odds, com a margem das casas removida), com peso configurável em Configurações.</li>
-      </ul>
-      <h3>3. Por que o foco em mercados de gols</h3>
-      <p>Over/Under e BTTS são os mercados mais modeláveis estatisticamente: dependem de taxas de gols, que são mais estáveis e previsíveis do que o resultado exato de um jogo, onde o empate e episódios aleatórios (expulsão, pênalti, gol contra) pesam demais. É também onde modelos de Poisson têm o histórico acadêmico mais sólido.</p>
-      <h3>4. Gestão de banca: Kelly fracionado com trava</h3>
-      <p>A stake sugerida usa o critério de Kelly, que dimensiona a aposta proporcionalmente à vantagem detectada, multiplicado por uma fração (padrão 0,25) porque o Kelly cheio assume que o modelo está perfeitamente calibrado, o que nunca é verdade. Há ainda um teto por aposta (padrão 3% da banca). Em múltiplas a fração é reduzida ainda mais, porque o erro do modelo se multiplica a cada perna.</p>
-      <h3>5. Regras de disciplina (as que separam lucro de prejuízo)</h3>
-      <ul>
-        <li>Nunca aumente a stake para "recuperar" uma perda. O modelo não sabe que você perdeu ontem, e a odd também não.</li>
-        <li>Registre todas as apostas na aba Bilhetes, inclusive as ruins. ROI real só existe com registro completo.</li>
-        <li>Avalie o desempenho em blocos de 100+ apostas, nunca na semana. Variância em amostra pequena engole qualquer vantagem.</li>
-        <li>Múltiplas são opcionais e mais arriscadas: a casa multiplica a margem dela a cada perna. A plataforma monta a múltipla como um apostador montaria: o melhor ângulo de cada jogo, mercados variados (não empilha o mesmo tipo), no máximo 4 pernas, no máximo 2 do mesmo tipo e no máximo 1 perna-âncora de odd baixa. Use com stake reduzida.</li>
-        <li>Desconfie de EV alto demais (acima de 20%): quase sempre é erro de dado (desfalque em massa, time reserva, jogo sem importância) que o modelo não enxerga. Confira a notícia antes.</li>
-      </ul>
-      <h3>6. O que o modelo não enxerga (e você deve conferir)</h3>
-      <p>Escalações e desfalques do dia, times poupando para outra competição, condições de clima e gramado, motivação em fim de campeonato, mudança recente de treinador. Um filtro humano de 5 minutos por jogo em cima da sugestão do modelo aumenta materialmente a qualidade das entradas.</p>
-      <h3>7. Expectativa honesta</h3>
-      <p>Apostador vencedor de longo prazo trabalha com ROI entre 2% e 8% ao ano sobre o volume apostado, com meses negativos no caminho. Qualquer promessa acima disso é marketing. Esta plataforma existe para encontrar valor e impor disciplina, não para garantir green diário; esse produto não existe.</p>
-      <h3>8. Motor v2 — o que mudou e o que o backtest mostrou</h3>
-      <p>A versão 2 nasceu de um backtest em ~5.200 jogos reais (5 ligas, 3 temporadas, odds de fechamento) que expôs as fraquezas da v1 e validou cada correção. As quatro mudanças:</p>
-      <ul>
-        <li><b>Dois horizontes de força</b>: força estrutural (janela longa, meia-vida ~58 dias) + forma recente (últimos jogos, peso de apenas 25%). A v1 usava um decaimento único tão rápido que a amostra efetiva tinha ~4 jogos: o ruído dominava.</li>
-        <li><b>xG do Understat</b> nas ligas cobertas (top 5 Europa): qualidade das chances em vez de gols brutos, que confundem sorte com nível. No Brasileirão (sem xG público), o motor usa gols com os demais ganhos da v2.</li>
-        <li><b>Calibração isotônica</b>: as probabilidades do modelo são corrigidas por curvas treinadas em temporadas passadas antes de virar EV. Na faixa onde estão 92% dos jogos, o desvio entre probabilidade prevista e frequência real caiu de ~8 pontos para ~1-2 pontos.</li>
-        <li><b>Kelly com desconto de incerteza</b>: a stake usa a probabilidade descontada do erro amostral — amostra curta empurra a stake para baixo automaticamente.</li>
-      </ul>
-      <p><b>Resultado honesto do backtest (temporada 2025/26 como teste):</b> o modelo calibrado parou de fabricar falso valor — com peso de mercado 25% e EV mínimo de 3%, a produção passou a recomendar pouquíssimas apostas, o que é o comportamento correto quando não há edge claro. Os picks só-modelo ainda perdem para o mercado no agregado. A conclusão operacional: use o painel como filtro de disciplina e registro (bilhetes + CLV, sempre manuais), teste em paralelo 300+ apostas e só considere dinheiro real com CLV positivo consistente.</p>
-      <h3>9. Modo "mais provável" — a filosofia atual do app (v2.1)</h3>
-      <p>A partir da v2.1 o app foca <b>apenas em mercados de gols</b> (Over/Under e BTTS) e escolhe em cada jogo <b>o desfecho mais provável</b> dentro de uma janela saudável (probabilidade entre 60% e 95%), com preferência por linhas Over quando há empate técnico — incluindo o clássico Over 1.5. Não há mais 1X2 nem dupla chance nas recomendações, e o valor esperado vira apenas informação, não critério. A múltipla do dia junta a linha mais segura de cada jogo, ordenada pela probabilidade, com stake fixa sugerida (metade do seu teto por aposta). Se você prefere caçar valor esperado como trader, troque o modo em Configurações — mas os dois modos continuam 100% em mercados de gols.</p>
-      <p><b>Como validar você mesmo:</b> <code>python -m app.backtest --fit-calibration --report backtest_report.md</code> regenera todo o relatório (Brier/LogLoss vs. mercado, calibração, teste de alfa, ROI e CLV das estratégias).</p>
-      <h3>10. v2.3 "Trader Free" — odds reais grátis, equilíbrio e verificação</h3>
-      <p><b>Odds de verdade sem pagar nada.</b> Em 2026 não existe mais API de odds de futebol gratuita (a The Odds API tirou o futebol do plano free; a API-Football grátis só tem temporadas antigas). O que resta grátis, sem chave e sem limite é o arquivo público do football-data.co.uk com as odds das próximas rodadas das ligas europeias: 1X2 e Over/Under 2.5 da <b>Bet365 e da Pinnacle</b> — a Pinnacle é a casa mais "sharp" do mundo, a referência de probabilidade real dos traders. O app baixa esse arquivo ~2 vezes ao dia (150 KB), casa com os jogos do painel por data e nome, e exibe a melhor odd real por mercado com o selo <b>real</b>.</p>
-      <p><b>Linhas derivadas do consenso.</b> E Over 1.5, BTTS, totais por time? Não existem no arquivo gratuito. Em vez de inventar, o app faz o que as próprias casas fazem: <b>inversão Poisson</b> — encontra os gols esperados implícitos no 1X2 + Over 2.5 do mercado (Bet365/Pinnacle, sem a margem) e projeta as demais linhas com a mesma matriz Dixon-Coles do motor, descontando uma margem padrão. Essas vêm com selo <b>derivada</b>: estimativa boa, mas não é preço de casa — confira na sua antes de confirmar. Jogos fora das ligas cobertas (Brasileirão, Champions) seguem com a <b>odd justa do modelo</b>, sem disfarce.</p>
-      <p><b>Equilíbrio acerto × odd.</b> Uma perna de 92% @1.04 estraga sua múltipla: risco inteiro por 4 centavos. Uma de 75% @1.55 às vezes é muito melhor negócio. O modo padrão "Equilíbrio acerto × odd" escolhe, em cada jogo, a linha mais segura cujo preço paga o risco (probabilidade manda, preço decide o desempate), evita odds abaixo de ~1.12 e monta a múltipla adicionando pernas da mais segura para a menos segura <b>só até atingir a odd-alvo</b> (padrão ~2.8): perna além do alvo só derruba sua taxa de acerto, não melhora retorno.</p>
-      <p><b>Verificação do trader (selo A/B/C).</b> Antes de cada pick o app passa pelo checklist que um profissional passa: amostra suficiente, insumo (xG/modelo conjunto), concordância do modelo com o mercado (modelo discordar muito do mercado sem motivo é sinal amarelo, não verde), descanso dos dois times, tendência recente alinhada com a perna, histórico do confronto e perfil da liga. A nota 0–10 vira o selo: A = evidências alinhadas, B = vale com cautela, C = o trader passa ou reduz. O selo não é promessa de green — é a soma das evidências disponíveis. A conferência humana de desfalques e escalações continua sendo sua e insubstituível.</p>
-      <p><b>Múltipla com régua de selo (padrão: nunca C).</b> A múltipla do dia só aceita pernas com selo A ou B da verificação — perna selo C <b>não entra em hipótese alguma</b> (a régua é configurável em Configurações). O selo é calculado para cada ângulo candidato de cada jogo, não só para o pick principal. Consequência deliberada: haverá dias sem múltipla nenhuma. É assim que um profissional opera: uma perna fraca derruba a combinação inteira, e a taxa de acerto de 4 pernas é a multiplicação das quatro — uma única 50/50 no meio transforma uma múltipla de 60% em uma de 30%. Em dia limpo, a múltipla aparece; em dia sujo, o app te protege de você mesmo.</p>
-      <p><b>Nada é gravado sozinho.</b> Bilhetes, resultados e CLV só existem se você registrar com um clique consciente. O único dado escrito automaticamente é o cache temporário das APIs (expira em horas e é limpo sozinho): sem ele, as cotas gratuitas das fontes de dados estourariam e o app pararia de funcionar. No Render free (disco apagado a cada deploy) o fluxo é: jogou o dia, baixou o backup em Configurações, vai atualizar o app → restaura o backup depois do deploy. Contas, senhas e jogos passados ficam com você, no seu arquivo — não no servidor.</p>
+<!-- ============================================================ RADAR -->
+<section id="t-radar">
+  <h2>Leitura de volatilidade — IV de mercado × RV do modelo</h2>
+  <div id="radar" class="grid g2"><div class="mut">carregando <span class="spin"></span></div></div>
+  <div id="radar-note" style="margin-top:12px"></div>
+</section>
+
+<!-- ============================================================ SUPERFÍCIE -->
+<section id="t-surface" style="display:none">
+  <h2>Superfície de opções (dados crus da fonte)</h2>
+  <div class="row" style="margin-bottom:10px">
+    <select id="s-ccy"><option>BTC</option><option>ETH</option></select>
+    <select id="s-exp"><option value="">todos os vencimentos</option></select>
+    <label class="chk"><input type="checkbox" id="s-liq" checked> só pontas líquidas</label>
+    <button class="pri" onclick="loadSurface()">carregar</button>
+    <span class="mut" id="s-info"></span>
+  </div>
+  <div class="card" style="overflow:auto;max-height:600px"><div id="s-body" class="mut">—</div></div>
+</section>
+
+<!-- ============================================================ DIÁRIO -->
+<section id="t-journal" style="display:none">
+  <h2>Diário de trades — nada é gravado sozinho</h2>
+  <div class="grid g4" id="stats"></div>
+  <div class="card" style="margin-top:12px">
+    <h3>Registrar operação <span class="mut" style="font-weight:400;text-transform:none">manual, como era no FutAnalytics</span></h3>
+    <div class="grid g4">
+      <div class="fld"><label>Moeda</label><select id="n-ccy"><option>BTC</option><option>ETH</option></select></div>
+      <div class="fld"><label>Estrutura</label><select id="n-struct"></select></div>
+      <div class="fld"><label>Direção</label><select id="n-dir">
+        <option value="short_vol">vender vol</option><option value="long_vol">comprar vol</option>
+        <option value="neutral_carry">carry neutro</option><option value="skew">skew</option></select></div>
+      <div class="fld"><label>IV de entrada (%)</label><input id="n-iv" type="number" step="0.01"></div>
+      <div class="fld"><label>Prêmio líquido</label><input id="n-prem" type="number" step="0.01"></div>
+      <div class="fld"><label>Notional</label><input id="n-not" type="number" step="0.01"></div>
+      <div class="fld"><label>Vega</label><input id="n-vega" type="number" step="0.0001"></div>
+      <div class="fld"><label>Perda em estresse</label><input id="n-stress" type="number" step="0.01"></div>
+      <div class="fld"><label>Vencimento</label><input id="n-exp" type="date"></div>
+      <div class="fld"><label>Selo (Etapa 3)</label><select id="n-grade"><option>A</option><option selected>B</option><option>C</option></select></div>
     </div>
-  </section>
-</main>
-<div id="toast" class="toast" style="display:none"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="pri" onclick="addTrade()">registrar</button>
+      <span class="mut">A perda em estresse deve ser o PIOR entre: IV +<span id="cfg-bump">3</span> pts ·
+        RV <span id="cfg-rvmult">2</span>× a prevista · gap de <span id="cfg-gap">2</span>σ adverso.</span>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h3>Posições</h3>
+    <div id="portfolio" class="mut">—</div>
+  </div>
+  <div class="card" style="margin-top:12px;overflow:auto">
+    <h3>Trades registrados</h3>
+    <div id="trades" class="mut">—</div>
+  </div>
+</section>
+
+<!-- ============================================================ PROVEDORES -->
+<section id="t-prov" style="display:none">
+  <h2>Diagnóstico de fontes de dados</h2>
+  <div class="note" style="margin-bottom:12px">
+    Achados da Etapa 0, validados contra as APIs reais em 26/set/2026:
+    <b>(1)</b> <code>get_book_summary_by_currency</code> devolve a cadeia inteira de opções com
+    <code>mark_iv</code> em <b>uma</b> chamada pública sem chave.
+    <b>(2)</b> <code>get_volatility_index_data</code> exige <code>currency</code>, não <code>index_name</code>.
+    <b>(3)</b> DVOL tem piso duro em <b>2024-01-01</b>.
+    <b>(4)</b> <code>api.binance.com</code> está <b>geo-bloqueada</b> em IP dos EUA — o Render free
+    hospeda em Ohio, então Binance ficou FORA da cadeia automática.
+    <b>(5)</b> Cross-check: close Coinbase 84.003,06 × <code>estimated_delivery_price</code>
+    Deribit 84.003,27 — 21 centavos de diferença.
+  </div>
+  <div class="row" style="margin-bottom:10px">
+    <select id="p-ccy"><option>BTC</option><option>ETH</option></select>
+    <button class="pri" onclick="testProv('all')">testar todos</button>
+    <button onclick="testProv('chain')">cadeia Deribit</button>
+    <button onclick="testProv('coinbase')">Coinbase</button>
+    <button onclick="testProv('kraken')">Kraken</button>
+    <button onclick="testProv('binance')">Binance (esperado falhar)</button>
+  </div>
+  <div id="prov-out" class="mut">—</div>
+</section>
+
+<!-- ============================================================ CONFIG -->
+<section id="t-cfg" style="display:none">
+  <h2>Configurações</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Capital e risco</h3>
+      <div class="grid g2">
+        <div class="fld"><label>Capital de risco</label><input id="c-bankroll" type="number" step="1"></div>
+        <div class="fld"><label>Moeda de exibição</label><input id="c-cur" type="text"></div>
+        <div class="fld"><label>Máx. posições</label><input id="c-maxpos" type="number" step="1"></div>
+        <div class="fld"><label>Teto vega (% capital)</label><input id="c-vega" type="number" step="0.5"></div>
+        <div class="fld"><label>Fração de Kelly</label><input id="c-kelly" type="number" step="0.05"></div>
+        <div class="fld"><label>Teto por operação (%)</label><input id="c-cap" type="number" step="0.5"></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label class="chk"><input type="checkbox" id="c-defrisk"> só estruturas de risco definido</label>
+        <label class="chk"><input type="checkbox" id="c-naked"> liberar venda descoberta</label>
+      </div>
+      <p class="mut" style="margin-top:8px">Decisão travada nesta migração: começa com
+      <b>só risco definido</b> (iron condor, spreads, calendar). Venda descoberta fica
+      desligada até existir CVL acumulado que comprove edge.</p>
+    </div>
+    <div class="card">
+      <h3>Modelo e cenários de estresse</h3>
+      <div class="grid g2">
+        <div class="fld"><label>Peso do modelo (vs mercado)</label><input id="c-mw" type="number" step="0.05"></div>
+        <div class="fld"><label>DTE alvo do VRP</label><input id="c-dte" type="number" step="1"></div>
+        <div class="fld"><label>Estresse: IV +pontos</label><input id="c-bump" type="number" step="0.5"></div>
+        <div class="fld"><label>Estresse: RV × múltiplo</label><input id="c-rvmult" type="number" step="0.1"></div>
+        <div class="fld"><label>Estresse: gap em σ</label><input id="c-gap" type="number" step="0.5"></div>
+        <div class="fld"><label>Spread máx. aceitável (%)</label><input id="c-spread" type="number" step="0.05"></div>
+      </div>
+      <h3 style="margin-top:14px">Universo e cache</h3>
+      <div class="grid g2">
+        <div class="fld"><label>Moedas no radar</label><input id="c-ccys" type="text"></div>
+        <div class="fld"><label>TTL cadeia (s)</label><input id="c-ttlchain" type="number" step="60"></div>
+        <div class="fld"><label>TTL velas (s)</label><input id="c-ttlcand" type="number" step="60"></div>
+        <div class="fld"><label>Dias de histórico</label><input id="c-days" type="number" step="10"></div>
+      </div>
+      <div class="fld" style="margin-top:10px"><label>Forçar provedor (vazio = automático)</label>
+        <select id="c-force"><option value="">automático (deribit → coinbase → kraken → demo)</option>
+        <option value="deribit">deribit</option><option value="coinbase">coinbase</option>
+        <option value="kraken">kraken</option></select></div>
+      <div class="row" style="margin-top:12px">
+        <button class="pri" onclick="saveCfg()">salvar</button>
+        <button onclick="exportBackup()">⬇ backup</button>
+        <button onclick="document.getElementById('imp').click()">⬆ restaurar</button>
+        <input type="file" id="imp" accept="application/json" style="display:none" onchange="importBackup(this)">
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ METODOLOGIA -->
+<section id="t-metodo" style="display:none">
+  <h2>Metodologia e expectativa honesta</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h3>De onde vem cada número</h3>
+      <div class="kv"><span class="k">IV (implícita)</span><span class="v">Deribit mark_iv, cadeia inteira em 1 chamada</span></div>
+      <div class="kv"><span class="k">IV 30d</span><span class="v">interpolação em variância total × tempo</span></div>
+      <div class="kv"><span class="k">Variância model-free</span><span class="v">fórmula VIX/CBOE sobre a cadeia</span></div>
+      <div class="kv"><span class="k">RV (realizada)</span><span class="v">EWMA 2 horizontes sobre OHLCV</span></div>
+      <div class="k"><span class="k">Estimador de amplitude</span><span class="v">Yang-Zhang › Garman-Klass › Parkinson</span></div>
+      <div class="kv"><span class="k">Salto</span><span class="v">bipower variation (robusta a saltos)</span></div>
+      <div class="kv"><span class="k">Previsão de vol</span><span class="v">Ornstein-Uhlenbeck, κ estimado por regressão</span></div>
+      <div class="kv"><span class="k">VRP</span><span class="v">IV 30d − RV prevista 30d</span></div>
+      <div class="kv"><span class="k">Anualização</span><span class="v">√365 — cripto não tem dia útil</span></div>
+    </div>
+    <div class="card">
+      <h3>Linhagem: o que veio do FutAnalytics</h3>
+      <div class="kv"><span class="k">DECAY_LONG / SHORT</span><span class="v">0.012 / 0.06 — valores originais</span></div>
+      <div class="kv"><span class="k">SHORT_WEIGHT 0.25</span><span class="v">era FORM_WEIGHT</span></div>
+      <div class="kv"><span class="k">RANGE_WEIGHT 0.65</span><span class="v">era XG_WEIGHT</span></div>
+      <div class="kv"><span class="k">model_weight 0.25</span><span class="v">era blend_markets</span></div>
+      <div class="kv"><span class="k">Calibração isotônica</span><span class="v">PAVA reutilizado (Etapa 2)</span></div>
+      <div class="kv"><span class="k">CVL</span><span class="v">era CLV vs odd de fechamento</span></div>
+      <div class="kv"><span class="k">Selo A/B/C</span><span class="v">checklist (Etapa 3) — C nunca entra</span></div>
+      <div class="kv"><span class="k">Fallback em cadeia</span><span class="v">era fd → openliga → espn → demo</span></div>
+    </div>
+  </div>
+  <div class="warnbox" style="margin-top:12px">
+    <b>Expectativa honesta — leia antes de operar qualquer coisa.</b><br>
+    Volatilidade implícita supera a realizada na maioria dos dias, e esse prêmio existe porque é
+    <b>pagamento por risco de cauda</b>, não dinheiro esquecido na mesa. Em abril de 2025 o VRP de
+    SPX foi a <b>−17 pontos (z −2,14)</b> e atropelou quem vendia prêmio. Vender volatilidade tem
+    skew negativo: coleta pequena por meses, perda grande num dia. Por isso o dimensionamento deste
+    app será sempre por <b>perda em cenário de estresse</b>, nunca por prêmio recebido.<br><br>
+    O backtest do FutAnalytics em ~5.200 jogos já dizia a verdade sobre odds: mercado eficiente,
+    lucro vem de disciplina, preço bom e filtragem. Aqui é igual. Este app existe para dar as três
+    coisas de graça — probabilidade calibrada, melhor preço disponível e um filtro que te tira das
+    operações ruins. Promessa de ganho garantido seria mentira, e mentira não entra neste código.
+  </div>
+  <div class="bad" style="margin-top:12px">
+    <b>Não é recomendação de investimento.</b> Ferramenta de análise. Derivativos de criptoativos
+    envolvem risco de perda total e risco de contraparte de exchange. A MP de 25/set/2026 proibiu
+    apostas de quota fixa e cassinos online no Brasil — negociar derivativos em exchange não é
+    aposta, mas isto não é aconselhamento jurídico nem fiscal. Consulte contador sobre tributação.
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h3>O que ainda falta (plano em <code>PLANO_SIGMADESK.md</code>)</h3>
+    <div class="kv"><span class="k">Etapa 0</span><span class="v">camada de dados + leitura de vol — ESTA TELA</span></div>
+    <div class="kv"><span class="k">Etapa 1</span><span class="v">realized.py + iv_surface.py completos</span></div>
+    <div class="kv"><span class="k">Etapa 2</span><span class="v">matriz de retorno log-normal + saltos, calibração PAVA, eventos</span></div>
+    <div class="kv"><span class="k">Etapa 3</span><span class="v">estruturas, gregas, sizing por estresse, checklist A/B/C</span></div>
+    <div class="kv"><span class="k">Etapa 4</span><span class="v">cross-section ridge → correlação medida no portfólio</span></div>
+    <div class="kv"><span class="k">Etapa 5</span><span class="v">backtest QLIKE/MSE, teste de alfa, CVL, replay de estresse</span></div>
+  </div>
+</section>
+
+<footer>
+  SigmaDesk <span id="f-ver">—</span> · migração da arquitetura preditiva do FutAnalytics v2.4.4 ·
+  FastAPI + SQLite + Python puro (zero dependência nova) · cabe no Render free ·
+  nada é gravado automaticamente além de cache com TTL.
+</footer>
+</div>
 
 <script>
-const $=s=>document.querySelector(s), $$=s=>document.querySelectorAll(s);
-const fmt=n=>'R$ '+Number(n).toFixed(2).replace('.',',');
-const pct=p=>(p*100).toFixed(1).replace('.',',')+'%';
-// Data de HOJE no fuso do dispositivo. Antes usávamos toISOString() (UTC):
-// no Brasil (UTC-3), entre 21h e 23h59 o painel carregava silenciosamente o
-// dia de AMANHÃ — e como há dia sem rodada nas ligas monitoradas, parecia
-// que o app tinha parado de mostrar jogos.
-const localDay=d=>{const x=new Date(d);x.setMinutes(x.getMinutes()-x.getTimezoneOffset());return x.toISOString().slice(0,10);};
-const WD=['dom','seg','ter','qua','qui','sex','sáb'];
-function jumpDay(d){$('#dayPick').value=d;loadDay();}
-let SETTINGS=null, DAY=null;
+const $=id=>document.getElementById(id);
+let S=null, LAST=null;
 
-function toast(msg){const t=$('#toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2600);}
-
-$$('nav button').forEach(b=>b.onclick=()=>{
-  $$('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
-  $$('main > section').forEach(s=>s.style.display='none');
-  $('#tab-'+b.dataset.tab).style.display='';
-  if(b.dataset.tab==='bets')loadBets();
-});
-
-async function api(path,opts){
-  let r;
-  try{r=await fetch(path,opts);}
-  catch(e){throw new Error('Sem conexão com o servidor. Abra a plataforma pela pré-visualização do app FutAnalytics (servidor rodando), não pelo arquivo index.html: o visualizador de arquivo não tem acesso à rede.');}
-  if(!r.ok){let d;try{d=await r.json()}catch(e){d={detail:r.statusText}}throw new Error(d.detail||('erro '+r.status));}
-  return r.json();
+function tab(name){
+  ['radar','surface','journal','prov','cfg','metodo'].forEach(t=>{
+    $('t-'+t).style.display = (t===name)?'':'none';
+  });
+  if(name==='journal'){loadTrades();}
+  if(name==='cfg'&&S){fillCfg();}
 }
 
-async function loadSettings(){
-  SETTINGS=await api('/api/settings');
-  $('#bankTop').textContent=fmt(SETTINGS.bankroll);
-  $('#sProvider').value=SETTINGS.provider;
-  $('#sFd').value=SETTINGS.fd_token; $('#sAf').value=SETTINGS.af_key;
-  $('#sBank').value=SETTINGS.bankroll; $('#sKelly').value=SETTINGS.kelly_fraction;
-  $('#sCap').value=SETTINGS.stake_cap_pct; $('#sEv').value=SETTINGS.min_ev;
-  $('#sMw').value=Math.round((SETTINGS.model_weight||0.25)*100);
-  $('#sXg').value=Math.round((SETTINGS.xg_weight??0.65)*100);
-  $('#sCal').checked=SETTINGS.use_calibration!==false;
-  $('#sKellyUnc').checked=SETTINGS.kelly_uncertainty!==false;
-  $('#sFdOdds').checked=SETTINGS.use_fd_odds!==false;
-  $('#sPickMode').value=SETTINGS.pick_mode||'balanced';
-  $('#sTarget').value=SETTINGS.target_parlay_odd||2.8;
-  $('#sMinLeg').value=SETTINGS.min_leg_odd||1.12;
-  $('#sMinGrade').value=SETTINGS.multiple_min_grade||'B';
+function pill(cls,txt){return `<span class="pill ${cls}">${txt}</span>`;}
+function srcPill(src){
+  if(src==='demo')return pill('p-bad','demo · sintético');
+  if(src==='deribit')return pill('p-ok','deribit · real');
+  if(src==='coinbase')return pill('p-ok','coinbase · real');
+  if(src==='kraken')return pill('p-warn','kraken · fallback');
+  return pill('p-mut',src||'?');
 }
-$('#saveProvider').onclick=async()=>{
-  await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({provider:$('#sProvider').value,fd_token:$('#sFd').value,af_key:$('#sAf').value})});
-  toast('Fonte de dados salva');await loadSettings();loadDay();
-};
-async function testProv(which,btn){
-  const box=$('#testResult');
-  const origText=btn.textContent;
-  btn.disabled=true;btn.textContent='Testando...';
-  box.innerHTML='<span class="small">Consultando o provedor...</span>';
+function fmt(x,d=2){return (x===null||x===undefined||isNaN(x))?'—':Number(x).toFixed(d);}
+
+async function load(force){
+  $('radar').innerHTML='<div class="mut">lendo superfície de volatilidade <span class="spin"></span></div>';
   try{
-    await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({fd_token:$('#sFd').value,af_key:$('#sAf').value})});
-    const r=await api('/api/test-provider?which='+which);
-    box.innerHTML=`<div class="${r.ok?'card':'warn'}" style="margin:0;padding:12px 14px;font-size:13.5px;${r.ok?'border-color:var(--green)':''}">${r.ok?'✅ ':'⚠️ '}${r.msg}</div>`;
+    const r=await fetch('/api/radar'); const j=await r.json();
+    LAST=j; render(j);
   }catch(e){
-    let msg=e.message;
-    if(/404/.test(msg))msg='O servidor está rodando uma versão antiga do código (sem a rota de teste). Atualize os arquivos da pasta app/ no GitHub com a versão mais recente e aguarde o redeploy do Render.';
-    box.innerHTML=`<div class="warn" style="margin:0">Erro no teste: ${msg}</div>`;
-  }finally{
-    btn.disabled=false;btn.textContent=origText;
+    $('radar').innerHTML=`<div class="bad">falha ao carregar: ${e}</div>`;
   }
 }
-$('#testFd').onclick=e=>testProv('fd',e.target);
-$('#testAf').onclick=e=>testProv('af',e.target);
-$('#testOl').onclick=e=>testProv('openliga',e.target);
-$('#testEspn').onclick=e=>testProv('espn',e.target);
-$('#saveBank').onclick=async()=>{
-  await api('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({bankroll:+$('#sBank').value,kelly_fraction:+$('#sKelly').value,
-      stake_cap_pct:+$('#sCap').value,min_ev:+$('#sEv').value,
-      model_weight:Math.max(0,Math.min(1,+$('#sMw').value/100)),
-      xg_weight:Math.max(0,Math.min(1,+$('#sXg').value/100)),
-      use_calibration:$('#sCal').checked,
-      kelly_uncertainty:$('#sKellyUnc').checked,
-      use_fd_odds:$('#sFdOdds').checked,
-      target_parlay_odd:Math.max(1.6,Math.min(8,+$('#sTarget').value||2.8)),
-      min_leg_odd:Math.max(1.02,Math.min(1.6,+$('#sMinLeg').value||1.12)),
-      multiple_min_grade:$('#sMinGrade').value,
-      pick_mode:$('#sPickMode').value})});
-  toast('Gestão de banca salva');await loadSettings();loadDay();
-};
 
-// ---- backup / restauração ----
-$('#btnBackup').onclick=async()=>{
-  try{
-    const r=await api('/api/backup');
-    const blob=new Blob([JSON.stringify(r,null,1)],{type:'application/json'});
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(blob);
-    a.download='futanalytics-backup-'+new Date().toISOString().slice(0,10)+'.json';
-    document.body.appendChild(a);a.click();a.remove();
-    URL.revokeObjectURL(a.href);
-    toast(`Backup baixado (${r.bets.length} bilhetes)`);
-  }catch(e){toast('Erro no backup: '+e.message);}
-};
-let restoreArmed=false;
-$('#btnRestore').onclick=()=>{
-  if(!restoreArmed){
-    restoreArmed=true;
-    $('#btnRestore').textContent='⚠ Confirmar restauração (substitui tudo)';
-    $('#btnRestore').classList.add('red');
-    $('#restoreInfo').textContent='Escolha o arquivo na próxima janela. Isto substitui bilhetes e configurações atuais.';
-    setTimeout(()=>{restoreArmed=false;$('#btnRestore').textContent='⬆ Restaurar de um arquivo…';$('#btnRestore').classList.remove('red');},6000);
-    return;
-  }
-  restoreArmed=false;
-  $('#btnRestore').textContent='⬆ Restaurar de um arquivo…';$('#btnRestore').classList.remove('red');
-  $('#fileRestore').click();
-};
-$('#fileRestore').onchange=async(e)=>{
-  const f=e.target.files[0];e.target.value='';
-  if(!f)return;
-  $('#restoreInfo').textContent='Restaurando…';
-  try{
-    const data=JSON.parse(await f.text());
-    const r=await api('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
-    $('#restoreInfo').textContent='';
-    toast(`Backup restaurado: ${r.bets} bilhetes`);
-    await loadSettings();
-    $('#bankTop').textContent=fmt(SETTINGS.bankroll);
-    loadBets();
-  }catch(err){
-    $('#restoreInfo').textContent='';
-    toast('Erro ao restaurar: '+err.message);
-  }
-};
+function render(j){
+  $('asof').textContent='· '+ (j.as_of||'').replace('T',' ')+' UTC';
+  const srcs=[...new Set((j.reads||[]).flatMap(r=>Object.values(r.sources||{})))];
+  const demo=srcs.includes('demo');
+  $('banner').innerHTML = demo
+    ? `<div class="warnbox"><b>Fonte em modo demonstração.</b> Alguma provedor real falhou e o app
+       caiu no sintético ancorado em dados reais. Os números abaixo <b>não são preço de mercado</b> —
+       confira na sua corretora antes de qualquer decisão.
+       ${Object.entries(j.errors||{}).map(([k,v])=>`<br>${k}: <code>${v}</code>`).join('')}</div>`
+    : `<div class="note"><b>Fontes reais:</b> ${srcs.map(s=>`<code>${s}</code>`).join(' · ')}.
+       Ainda assim: IV de tela não é IV executável — o spread bid/ask é custo real.</div>`;
 
-function hhmm(iso){try{const d=new Date(iso);return d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
-
-function oddTag(fx,k){
-  if(!fx.odds_meta)return '';
-  const src=(fx.odds_meta.real||[]).includes(k)?'real':((fx.odds_meta.derived||[]).includes(k)?'derived':'');
-  if(src==='real')return ' <span class="pill green" style="font-size:9px;padding:1px 6px" title="Odd REAL de casa de apostas (Bet365/Pinnacle)">real</span>';
-  if(src==='derived')return ' <span class="pill amber" style="font-size:9px;padding:1px 6px" title="Odd derivada do consenso do mercado (inversão Poisson) — estimativa boa, não preço de casa">derivada</span>';
-  return '';
+  const el=$('radar'); el.innerHTML='';
+  (j.reads||[]).forEach(r=>el.appendChild(card(r)));
+  $('radar-note').innerHTML = `<div class="mut">${j.aviso||''}</div>`;
 }
 
-function marketRows(fx){
-  const mk=fx.analysis.markets, fo=fx.analysis.fair_odds, odds=fx.odds||{};
-  const order=['over_1.5','over_2.5','under_2.5','btts_yes','btts_no','over_3.5','home','draw','away','dc_1x','dc_x2'];
-  const L={"over_1.5":"Over 1.5","over_2.5":"Over 2.5","under_2.5":"Under 2.5","btts_yes":"BTTS sim","btts_no":"BTTS não","over_3.5":"Over 3.5","under_3.5":"Under 3.5","home":"Casa","draw":"Empate","away":"Fora","dc_1x":"DC 1X","dc_x2":"DC X2","dc_12":"DC 12"};
-  return order.map(k=>{
-    const o=odds[k], p=mk[k];
-    const ev=o?(p*o-1):null;
-    const evCell=ev===null?'<span class="small">—</span>':`<span style="color:${ev>0?'var(--green)':'var(--red)'}">${(ev*100).toFixed(1)}%</span>`;
-    return `<tr><td>${L[k]}${oddTag(fx,k)}</td><td class="num">${pct(p)}</td><td class="num">${fo[k].toFixed(2)}</td><td class="num">${o?o.toFixed(2):'—'}</td><td class="num">${evCell}</td></tr>`;
-  }).join('');
-}
-
-
-function goalsBlock(a){
-  const dist=a.totals_dist||{}, maxP=Math.max(...Object.values(dist),0.01);
-  const order=['0','1','2','3','4','5','6+'];
-  const bars=order.map(k=>{
-    const p=dist[k==='6+'?'6':k]||0;
-    return `<div style="flex:1;text-align:center" title="Total ${k} gols: ${(p*100).toFixed(1)}%">
-      <div style="height:${Math.max(4,(p/maxP)*64)}px;background:linear-gradient(180deg,var(--blue),var(--green));border-radius:4px 4px 0 0;margin:0 2px"></div>
-      <div class="small" style="font-size:10px">${k}</div>
-      <div class="small" style="font-size:9.5px;color:var(--mut)">${(p*100).toFixed(0)}%</div>
-    </div>`;
-  }).join('');
-  const tt=(mk,lbl)=>a.markets[mk]!==undefined?`<span class="pill blue" title="odd justa ${(1/a.markets[mk]).toFixed(2)}">${lbl} ${pct(a.markets[mk])}</span>`:'';
-  const trend=(t,side)=>!t||!t.n?'':'<div class="stat small">Últimos '+t.n+' · '+side+': média <b>'+t.avg_for.toFixed(1)+'</b> gols feitos / <b>'+t.avg_against.toFixed(1)+'</b> sofridos · O1.5 '+pct(t.over15_rate)+' · O2.5 '+pct(t.over25_rate)+' · BTTS '+pct(t.btts_rate)+(t.failed_to_score?' · não marcou '+t.failed_to_score:'')+(t.clean_sheets?' · zerou o gol '+t.clean_sheets+'x':'')+'</div>';
-  const h2h=(a.h2h&&a.h2h.length)?'<div class="stat small" style="margin-top:6px">Confrontos recentes: '+a.h2h.map(h=>'<b>'+h.total+' gols</b> ('+h.hg+'x'+h.ag+')').join(' · ')+'</div>':'';
-  const env=a.league_env?'<div class="stat small">Liga: média <b>'+(a.league_env.avg_goals||'—')+'</b> gols/jogo · Over 2.5 em '+pct(a.league_env.over25_rate||0)+' · BTTS '+pct(a.league_env.btts_rate||0)+'</div>':'';
-  return `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">
-    <div class="small" style="margin-bottom:6px"><b>Distribuição de gols totais</b> (probabilidade por linha)</div>
-    <div style="display:flex;align-items:flex-end;height:96px">${bars}</div>
-    <div style="margin:10px 0 6px;display:flex;gap:6px;flex-wrap:wrap">
-      ${tt('ht_0.5','Casa marca 0.5+')} ${tt('at_0.5','Fora marca 0.5+')} ${tt('ht_1.5','Casa 1.5+')} ${tt('at_1.5','Fora 1.5+')}
-      ${a.joint_model?'<span class="pill amber" title="λ ajustado por adversário (modelo conjunto da liga)">ajustado p/ adversário</span>':''}
-      ${a.fatigue_home&&a.fatigue_home.fatigue_level>=2?'<span class="pill red" title="Fadiga avançada detectada">fadiga</span>':''}
-      ${a.xg_reg_home&&Math.abs(a.xg_reg_home.atk_delta)>2.5?'<span class="pill amber" title="Regressão de finalização xG vs gols">xG regressão</span>':''}
-    </div>
-    ${trend(a.trends_home,'casa')}
-    ${trend(a.trends_away,'fora')}
-    ${a.fatigue_home?`<div class="stat small" style="margin-top:6px">🔋 Fadiga: casa <b>${a.fatigue_home.games_7}j/7d, ${a.fatigue_home.games_14}j/14d, desc ${a.fatigue_home.rest}d (${a.fatigue_home.fatigue_label})</b> · fora <b>${a.fatigue_away.games_7}j/7d, ${a.fatigue_away.games_14}j/14d, desc ${a.fatigue_away.rest}d (${a.fatigue_away.fatigue_label})</b></div>`:''}
-    ${a.xg_reg_home&&a.xg_reg_home.n_xg>=4?`<div class="stat small">📊 xG vs Gols (10j): casa <b>${a.xg_reg_home.atk_delta>0?'+':''}${a.xg_reg_home.atk_delta} atk, ${a.xg_reg_home.def_delta>0?'+':''}${a.xg_reg_home.def_delta} def (${a.xg_reg_home.regression})</b> · fora <b>${a.xg_reg_away.atk_delta>0?'+':''}${a.xg_reg_away.atk_delta}, ${a.xg_reg_away.def_delta>0?'+':''}${a.xg_reg_away.def_delta} (${a.xg_reg_away.regression})</b></div>`:''}
-    ${env}
-    ${h2h}
-  </div>`;
-}
-
-function gradePill(g){
-  const map={A:['green','Verificação forte: evidências alinhadas (não é garantia)'],B:['blue','Verificação média: vale com cautela'],C:['red','Verificação fraca: o trader passa ou reduz muito a stake']};
-  if(!g||!map[g])return '';
-  return `<span class="pill ${map[g][0]}" title="${map[g][1]}">selo ${g}</span>`;
-}
-
-function checklistBlock(a){
-  const c=a.checklist;if(!c||!c.items||!c.items.length)return '';
-  const ic={ok:'<span style="color:var(--green);font-weight:800">✓</span>',warn:'<span style="color:var(--amber);font-weight:800">~</span>',bad:'<span style="color:var(--red);font-weight:800">✗</span>'};
-  return `<div style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)">
-    <div class="small" style="margin-bottom:6px"><b>Verificação do trader</b> · nota ${c.score.toFixed(1)}/10 ${gradePill(c.grade)}</div>
-    ${c.items.map(i=>`<div class="stat small" style="display:flex;gap:7px;margin-top:3px"><span>${ic[i.state]||''}</span><span><b>${i.item}</b>: ${i.detail}</span></div>`).join('')}
-  </div>`;
-}
-
-function renderFixture(fx,isBest){
-  const a=fx.analysis,b=fx.best;
-  const feeds={'football-data.co.uk':'Bet365/Pinnacle','API-Football':'odds reais','demo':'demo'};
-  const feedTag=fx.odds_meta?`<span class="pill ${fx.odds_meta.source==='demo'?'gray':'green'}" title="Fonte das odds deste jogo">${feeds[fx.odds_meta.source]||'odds'}</span>`:'<span class="pill gray" title="Sem preço de mercado: a odd exibida é a justa do modelo">odd justa</span>';
-  const evTag=b?`${gradePill(b.grade)} <span class="pill green">prob ${pct(b.prob)}</span>${b.ev!==null?` <span class="pill ${b.ev>0?'green':'red'}" title="informativo">EV ${(b.ev*100).toFixed(1)}%</span>`:''}`:'';
-  const pick=b?`
-    <div class="bigpick">
-      <div class="lab">${isBest?'⭐ Aposta do dia':'Melhor mercado'}</div>
-      <div class="val">${b.label} <span class="oddtag">@${b.odd.toFixed(2)}</span>${b.odd_kind==='derived'?' <span class="pill amber" style="font-size:9px;padding:1px 6px">derivada</span>':''}${b.odd_kind==='real'?' <span class="pill green" style="font-size:9px;padding:1px 6px">real</span>':''}</div>
-      <div class="small">${b.odd_is_fair?'probabilidade do modelo':'probabilidade (modelo + mercado)'} ${pct(b.prob)} ${b.odd_is_fair?'(odd justa, sem odds de mercado)':''}${b.check_score!==undefined&&b.check_score!==null?` · verificação ${b.check_score}/10`:''}</div>
-      <div class="bar"><i style="width:${(b.prob*100).toFixed(0)}%"></i></div>
-      <div class="row" style="margin-top:10px">
-        ${evTag}
-        ${fx.stake&&fx.stake.stake>0?`<span class="pill blue">stake ${fmt(fx.stake.stake)} (${fx.stake.pct}%)</span>`:''}
-        <span class="spacer"></span>
-        <button class="btn sm" onclick='saveSingle(${JSON.stringify(fx.id)})'>Registrar bilhete</button>
-      </div>
-    </div>`:'<div class="small">Sem linha de gols segura o suficiente neste jogo.</div>';
-  return `<div class="matchcard ${isBest?'best':''}" id="fx-${fx.id}">
-    <div class="mhead">
-      <span class="pill blue">${fx.league}</span>
-      <span class="teams">${fx.home.name} <span style="color:var(--mut)">x</span> ${fx.away.name}</span>
-      ${a.xg_used?'<span class="pill green" title="Histórico calculado com gols esperados (xG) do Understat">xG</span>':''}
-      ${a.calibrated?'<span class="pill amber" title="Probabilidades corrigidas por curvas de calibração treinadas em temporadas passadas">calibrado</span>':''}
-      ${feedTag}
-      <span class="spacer"></span>
-      <span class="small">${hhmm(fx.kickoff_utc)} · confiança do modelo ${pct(a.confidence)}</span>
-    </div>
-    <div class="mbody">
-      <div>
-        <div class="stat">Gols esperados: <b>${a.lambda_home}</b> x <b>${a.lambda_away}</b> (total <b>${a.expected_goals_total}</b>)</div>
-        <div class="stat">Forma (últimos 5): casa <b>${pct(a.form_home)}</b> · fora <b>${pct(a.form_away)}</b></div>
-        <div class="stat">Placares prováveis: ${a.top_scores.map(s=>`<b>${s.score}</b> (${pct(s.prob)})`).join(' · ')}</div>
-        <div class="stat small" style="margin-top:6px">Amostra: ${a.sample_home} jogos (casa) · ${a.sample_away} (fora), ponderada por recência</div>
-        ${goalsBlock(a)}
-        ${checklistBlock(a)}
-      </div>
-      <div>${pick}</div>
-      <div style="overflow-x:auto"><table>
-        <tr><th>Mercado</th><th class="num">Prob</th><th class="num">Justa</th><th class="num">Mercado</th><th class="num">EV</th></tr>
-        ${marketRows(fx)}
-      </table></div>
-    </div>
-  </div>`;
-}
-
-function renderMultiple(m){
-  if(!m){
-    const mg=DAY&&(DAY.multiple_min_grade||'B');
-    return `<div class="card"><h3>Múltipla do dia</h3><div class="empty">Sem múltipla hoje${mg!=='C'?`: nenhum conjunto de pernas alcançou o selo mínimo <b>${mg}</b> da verificação do trader (${mg==='B'?'só selo A ou B entram':'só selo A entra'})`:''}. Disciplina de banca: dia de apostas individuais criteriosas ou de ficar de fora — múltipla forçada é presente para a casa.</div></div>`;
+function card(r){
+  const d=document.createElement('div'); d.className='card';
+  if(!r.ok){
+    d.innerHTML=`<h3>${r.ccy} ${srcPill((r.sources||{}).options)}</h3>
+      <div class="bad">sem leitura: ${r.error||r.reason||(r.realized||{}).reason||'dados insuficientes'}</div>`;
+    return d;
   }
-  const mg=m.min_grade||'B';
-  const kindPill=k=>k==='real'?'<span class="pill green" style="font-size:9px;padding:1px 6px" title="Odd real de casa">real</span>':(k==='derived'?'<span class="pill amber" style="font-size:9px;padding:1px 6px" title="Odd derivada do consenso">derivada</span>':'<span class="pill gray" style="font-size:9px;padding:1px 6px" title="Odd justa do modelo (sem mercado)">justa</span>');
-  const legGradePill=g=>g?`<span class="pill ${{A:'green',B:'blue',C:'red'}[g]||'gray'}" style="font-size:9px;padding:1px 6px" title="Verificação do trader da perna">${g}</span>`:'';
-  return `<div class="card" style="border-color:var(--amber)">
-    <div class="row"><h3>🎯 Múltipla do dia (${m.legs.length} pernas)</h3>
-      ${mg!=='C'?`<span class="pill green" title="Todas as pernas passaram na verificação do trader com selo no mínimo ${mg}. Perna com selo C não entra na múltipla.">só selo ${mg==='B'?'A/B':'A'}</span>`:''}
-      <span class="spacer"></span>
-      <span class="pill amber">odd combinada ${m.combined_odd.toFixed(2)}${m.target_odd?` <span class="small" style="font-weight:400">(alvo ${m.target_odd.toFixed(2)})</span>`:''}</span>
-      <span class="pill ${m.ev==null?'gray':(m.ev>0?'green':'red')}">EV ${m.ev==null?'—':(m.ev*100).toFixed(1)+'%'}</span>
-      ${m.real_legs!==undefined?`<span class="pill ${m.real_legs===m.legs.length?'green':(m.real_legs?'blue':'gray')}" title="Quantas pernas têm preço REAL de casa de apostas; derivadas vêm do consenso; justas são do modelo">${m.real_legs}/${m.legs.length} odds reais</span>`:''}
-    </div>
-    <div style="margin:10px 0">
-      ${m.legs.map(l=>`<div class="legrow"><span class="pill blue">${l.league}</span><b>${l.match}</b><span>${l.label}</span>${l.anchor?'<span class="pill gray">âncora</span>':''}<span class="oddtag">@${l.odd.toFixed(2)}</span>${kindPill(l.odd_kind)}${legGradePill(l.grade)}<span class="small">${pct(l.prob)}</span></div>`).join('')}
-    </div>
-    <div class="row">
-      <span class="stat">Probabilidade combinada: <b>${pct(m.combined_prob)}</b>${m.combined_prob_adj&&m.correlation_penalty<1?` → ajustada <b>${pct(m.combined_prob_adj)}</b> <span class="pill red" title="${(m.correlation_detail||[]).join("; ")}">correlação -${Math.round((1-m.correlation_penalty)*100)}%</span>`:``}</span>
-      ${m.stake&&m.stake.stake>0?`<span class="pill blue">stake sugerida ${fmt(m.stake.stake)} (${m.stake.pct}%)</span>`:'<span class="pill gray">sem odds reais para dimensionar stake</span>'}
-      <span class="spacer"></span>
-      <button class="btn sm" onclick="saveMultiple()">Registrar múltipla</button>
-    </div>
-  </div>`;
+  const v=r.vrp||{}, rv=r.realized||{}, ts=r.term_structure||[], fw=r.forward_variance||[];
+  const band=v.band||'—';
+  const bcls = band==='NEGATIVO'?'p-bad':(band==='muito rico'||band==='saudável')?'p-ok':
+               (band==='magro'||band==='marginal')?'p-warn':'p-mut';
+  const z=v.zscore;
+  const zcls = z===null||z===undefined?'p-mut':(z>1?'p-ok':(z>0?'p-warn':'p-bad'));
+
+  d.innerHTML=`
+  <h3>${r.ccy} <span class="row" style="gap:6px">
+      ${srcPill(r.sources.options)}${srcPill(r.sources.candles)}
+      ${r.is_demo?pill('p-bad','DEMO'):pill('p-ok','real')}</span></h3>
+
+  <div class="grid g4" style="gap:8px;margin-bottom:12px">
+    <div><div class="lbl">spot</div><div class="big">${fmt(r.spot,0)}</div></div>
+    <div><div class="lbl">IV 30d</div><div class="big">${fmt(r.iv_30d)}%</div></div>
+    <div><div class="lbl">RV (modelo)</div><div class="big">${fmt(rv.rv)}%</div></div>
+    <div><div class="lbl">VRP</div><div class="big" style="color:${v.vrp>0?'var(--ok)':'var(--bad)'}">${fmt(v.vrp)} pts</div></div>
+  </div>
+
+  <div class="row" style="margin-bottom:10px">
+    ${pill(bcls,band)} ${pill(zcls,'z '+(z===null||z===undefined?'—':z))}
+    ${v.ratio?pill('p-mut','IV/RV '+v.ratio):''}
+    ${rv.jumps&&rv.jumps.n?pill('p-warn',rv.jumps.n+' saltos'):''}
+    ${rv.range_used?pill('p-ok','amplitude w='+rv.range_weight_eff):pill('p-warn','só close-to-close')}
+  </div>
+  <div class="note" style="margin-bottom:12px"><b>${v.action||'—'}</b></div>
+
+  <div class="kv"><span class="k">RV prevista (OU, κ=${fmt((r.vol_forecast||{}).kappa_daily,4)})</span>
+      <span class="v">${fmt((r.vol_forecast||{}).rv_forecast)}%</span></div>
+  <div class="kv"><span class="k">meia-vida da reversão</span>
+      <span class="v">${fmt((r.vol_forecast||{}).half_life_days,1)} d</span></div>
+  <div class="kv"><span class="k">VRP histórico (n=${v.hist_n||0}, % dias positivos)</span>
+      <span class="v">${v.pct_positive!==undefined?Math.round(v.pct_positive*100)+'%':'—'}</span></div>
+  <div class="kv"><span class="k">variância model-free (VIX-style)</span>
+      <span class="v">${r.model_free?fmt(r.model_free.implied_vol)+'% · '+r.model_free.strikes_used+' strikes':'—'}</span></div>
+
+  <h3 style="margin-top:14px">Dois horizontes de RV <span class="mut" style="font-weight:400;text-transform:none">herança do FutAnalytics</span></h3>
+  <div class="kv"><span class="k">longo (meia-vida ~58d)</span><span class="v">${fmt(rv.rv_long)}%</span></div>
+  <div class="kv"><span class="k">curto (meia-vida ~11d)</span><span class="v">${fmt(rv.rv_short)}%</span></div>
+  <div class="kv"><span class="k">close-to-close combinado</span><span class="v">${fmt(rv.rv_cc)}%</span></div>
+  <div class="kv"><span class="k">Parkinson</span><span class="v">${fmt(rv.rv_parkinson)}%</span></div>
+  <div class="kv"><span class="k">Garman-Klass</span><span class="v">${fmt(rv.rv_garman_klass)}%</span></div>
+  <div class="kv"><span class="k">Yang-Zhang</span><span class="v">${fmt(rv.rv_yang_zhang)}%</span></div>
+  <div class="kv"><span class="k">difusão / salto</span>
+      <span class="v">${fmt((rv.jumps||{}).diffusion_vol)}% / ${fmt((rv.jumps||{}).jump_vol)}%</span></div>
+  <div class="kv"><span class="k">assimetria / curtose excedente</span>
+      <span class="v">${fmt(rv.skew,2)} / ${fmt(rv.excess_kurtosis,2)}</span></div>
+  <div class="kv"><span class="k">amostra efetiva (n barras ponderadas)</span><span class="v">${fmt(rv.n_eff,1)}</span></div>
+
+  <h3 style="margin-top:14px">Estrutura a termo</h3>
+  ${ts.length?`<table><tr><th>venc.</th><th class="t">DTE</th><th class="t">IV ATM</th>
+    <th class="t">fwd</th><th class="t">líq.</th></tr>
+    ${ts.slice(0,8).map(t=>`<tr><td>${t.expiry}</td><td class="t">${fmt(t.dte,1)}</td>
+      <td class="t">${fmt(t.atm_iv)}</td><td class="t">${fmt(t.forward,0)}</td>
+      <td class="t">${t.n_liquid}/${t.n_all}</td></tr>`).join('')}</table>`:'<span class="mut">sem vencimentos</span>'}
+  ${fw.length?`<div class="row" style="margin-top:8px">${fw.slice(0,4).map(f=>
+      pill(f.regime==='contango'?'p-ok':(f.regime==='backwardation'?'p-bad':'p-mut'),
+        `${f.dte_from|0}→${f.dte_to|0}d ${fmt(f.fwd_vol)}% ${f.regime}`)).join(' ')}</div>`:''}
+
+  <h3 style="margin-top:14px">Skew e posicionamento</h3>
+  <div class="kv"><span class="k">risk reversal (put 7% OTM − call 7% OTM)</span>
+      <span class="v">${r.skew?fmt(r.skew.risk_reversal)+' pts':'—'}</span></div>
+  <div class="kv"><span class="k">butterfly (convexidade)</span>
+      <span class="v">${r.skew?fmt(r.skew.butterfly)+' pts':'—'}</span></div>
+  <div class="kv"><span class="k">leitura</span><span class="v">${r.skew?r.skew.lean:'—'}</span></div>
+  <div class="kv"><span class="k">put/call OI</span>
+      <span class="v">${r.put_call&&r.put_call.ratio?r.put_call.ratio+' ('+r.put_call.lean+')':'—'}</span></div>
+  <div class="kv"><span class="k">opções / líquidas / vencimentos</span>
+      <span class="v">${r.n_options} / ${r.n_liquid} / ${r.n_expiries}</span></div>
+  <div class="mut" style="margin-top:8px">cálculo em ${fmt(r.compute_ms,0)} ms</div>`;
+  return d;
 }
 
-async function loadDay(){
-  const day=$('#dayPick').value||localDay(new Date());
-  $('#dayContent').innerHTML='<div class="loading"><div class="spin"></div><br>Analisando jogos do dia...<br><span class="small">Na primeira carga do dia com a football-data.org isso pode levar alguns minutos: a API gratuita limita 10 consultas por minuto e cada time exige uma consulta de histórico. Depois fica em cache e abre na hora.</span></div>';
-  let attempt=0;
-  while(true){
-    try{
-      DAY=await api('/api/day?day='+day);
-      break;
-    }catch(e){
-      // Erro definitivo de provedor (token/plano/recusa) não se resolve com
-      // nova tentativa: mostra a causa na hora em vez de fingir "aquecimento".
-      const fatal=/recusou|subscription|permiss|token|chave|plano|Configure/i.test(e.message);
-      const gw=!fatal&&/erro 502|erro 503|erro 504|Bad Gateway|Service Unavailable|Gateway Timeout|Limite de requisi|Falha de conex/i.test(e.message);
-      if(gw && attempt<10){
-        attempt++;
-        $('#dayContent').innerHTML=`<div class="loading"><div class="spin"></div><br>O servidor gratuito (Render) está aquecendo e cortou a análise no meio.<br><span class="small">Tentativa ${attempt}/10 automática em 15s. Cada tentativa aproveita o que já foi baixado; em 1 a 3 minutos o painel abre sozinho.</span></div>`;
-        await new Promise(r=>setTimeout(r,15000));
-        continue;
-      }
-      $('#dayContent').innerHTML=`<div class="warn">Erro ao carregar: ${e.message}</div>`;
-      return;
-    }
-  }
-  try{
-  const provNames={demo:'· dados de demonstração',fd:'· football-data.org',af:'· API-Football',openliga:'· OpenLigaDB (fallback)',espn:'· ESPN (fallback)'};
-  let tag=(provNames[DAY.provider]||`· ${DAY.provider}`)+(DAY.version?` · v${DAY.version}`:'');
-  if(DAY.requested_provider&&DAY.requested_provider!==DAY.provider){
-    tag+=` · fallback automático: pediu ${DAY.requested_provider} → usou ${DAY.provider}`;
-  }
-  if(DAY.fallback&&DAY.fallback.tried){
-    tag+=` · tentou: ${DAY.fallback.tried.join(' → ')}`;
-  }
-  $('#provTag').textContent=tag;
-  if(DAY.odds_feed&&DAY.odds_feed.available){
-    $('#provTag').textContent+=` · odds reais: Bet365/Pinnacle (${DAY.odds_feed.n_events} jogos no arquivo)`;
-  }else if(DAY.provider!=='demo'){
-    $('#provTag').textContent+=' · odds reais indisponíveis hoje (odd justa do modelo)';
-  }
-    let html='';
-    if(DAY.fallback&&DAY.fallback.fallback){
-      if(DAY.provider==='demo'){
-        html+=`<div class="warn">⚠️ <b>Todas as fontes reais falharam</b> (tentou: ${(DAY.fallback.tried||[]).join(' → ')}). O app usou <b>dados de demonstração</b> para não quebrar.<br><span class="small">Causa: ${DAY.fallback.reason||'sem detalhes'}.<br>→ Teste em Configurações: "Testar football-data", "Testar OpenLigaDB", "Testar ESPN". Se o token expirou, gere um novo em football-data.org/client/register e salve.</span></div>`;
-      }else{
-        html+=`<div class="card" style="border-color:var(--blue)"><span class="pill blue">fallback</span> Provedor principal (${DAY.requested_provider||'fd'}) não trouxe jogos. Usando automaticamente <b>${DAY.provider}</b> (tentou: ${(DAY.fallback.tried||[]).join(' → ')}).<span class="small"> ${DAY.fallback.reason||''}</span></div>`;
-      }
-    }
-    if(DAY.provider==='demo'&&!(DAY.fallback&&DAY.fallback.fallback))html+=`<div class="warn">Você está no modo demonstração com dados simulados. Configure uma chave gratuita em Configurações para analisar jogos reais do dia.</div>`;
-    if(DAY.errors&&DAY.errors.length)html+=`<div class="warn">${DAY.errors.length} jogo(s) não puderam ser analisados: ${DAY.errors[0].error||''} Aguarde 1 minuto e clique em "Atualizar análise": o que já foi baixado fica em cache e só falta o restante.</div>`;
-    if(!DAY.fixtures.length){
-      const cnt=DAY.day_counts||{};
-      const chips=Object.keys(cnt).filter(d=>d&&d!==DAY.day&&cnt[d]>0).sort().map(d=>{
-        const lab=WD[new Date(d+'T12:00:00').getDay()]+' '+d.slice(8,10)+'/'+d.slice(5,7);
-        return `<button class="btn sm ghost" onclick="jumpDay('${d}')">${lab} · ${cnt[d]} jogo${cnt[d]>1?'s':''}</button>`;
-      }).join('');
-      // Diagnóstico: separa "dia sem rodada" de "a API parou de entregar".
-      // Um 0 absoluto numa janela de 9 dias com ~10 ligas ativas quase nunca é
-      // calendário real — é provedor (token/plano/instabilidade). Dias passados
-      // podem continuar aparecendo só porque ficaram cacheados por 7 dias.
-      const dbg=DAY.fixtures_debug||{};
-      let diag='';
-      if(dbg.api_matches!==undefined&&!chips){
-        const got=dbg.api_matches||0,mon=dbg.monitored_matches||0;
-        if(got===0)diag=`<div class="warn" style="margin-top:14px;text-align:left">⚠️ <b>A API devolveu 0 jogos numa janela de 9 dias (${dbg.window})</b> — isso quase nunca é calendário real: aponta para problema no provedor (token, plano ou instabilidade da API)${dbg.fallback?'. O app tentou a rota por competição como plano B e também não recebeu nada':''}. Dias passados podem continuar aparecendo só porque ficaram guardados em cache por 7 dias.<br><b>O que fazer:</b> abra Configurações → "Testar football-data" para ver a causa exata; se o teste falhar, gere um token novo em football-data.org e salve de novo.</div>`;
-        else if(mon===0)diag=`<div class="warn" style="margin-top:14px;text-align:left">⚠️ A API devolveu ${got} jogos na janela ${dbg.window}, mas <b>nenhum nas ligas monitoradas</b> — o plano do token pode ter perdido acesso às competições. Teste em Configurações → "Testar football-data".</div>`;
-      }
-      html+=`<div class="card"><div class="empty">Nenhum jogo das ligas monitoradas nesta data${chips?`.<br><span class="small">Algumas ligas não têm rodada todo dia (ex.: segundas e quartas de semana sem rodada). Jogos nos dias próximos — toque para abrir:</span><div class="row" style="justify-content:center;margin-top:10px;gap:8px;flex-wrap:wrap">${chips}</div>`:'. Tente outra data ou outro provedor.'}${diag}</div></div>`;
-    }
-    else{
-      html+=renderMultiple(DAY.multiple);
-      const best=DAY.fixtures.find(f=>f.id===DAY.best_single);
-      const rest=DAY.fixtures.filter(f=>f.id!==DAY.best_single)
-        .sort((a,b)=>((b.best?b.best.score:-9))-((a.best?a.best.score:-9)));
-      if(best)html+=renderFixture(best,true);
-      else if(DAY.fixtures.length)html+=`<div class="warn">Nenhum jogo com linha de gols segura o suficiente hoje. Dia sem favorito claro é dia de apostar menos, não de forçar entrada.</div>`;
-      html+=rest.map(f=>renderFixture(f,false)).join('');
-    }
-    $('#dayContent').innerHTML=html;
-  }catch(e){
-    $('#dayContent').innerHTML='<div class="warn">Erro ao exibir as análises: '+e.message+'. Clique em "Atualizar análise" para recarregar.</div>';
+async function loadSurface(){
+  const ccy=$('s-ccy').value, exp=$('s-exp').value, liq=$('s-liq').checked;
+  $('s-body').innerHTML='<span class="spin"></span>';
+  const q=new URLSearchParams({ccy,liquid_only:liq}); if(exp)q.set('expiry',exp);
+  const j=await (await fetch('/api/surface?'+q)).json();
+  $('s-info').innerHTML=`fonte ${srcPill(j.source)} · ${j.n} instrumentos`;
+  if(!j.options||!j.options.length){$('s-body').innerHTML='<span class="mut">vazio</span>';return;}
+  $('s-body').innerHTML=`<table><tr><th>instrumento</th><th class="t">DTE</th><th class="t">strike</th>
+    <th class="t">IV%</th><th class="t">bid</th><th class="t">ask</th><th class="t">spread%</th>
+    <th class="t">OI</th><th class="t">vol USD</th><th>líq.</th></tr>
+    ${j.options.map(o=>`<tr><td>${o.instrument}</td><td class="t">${fmt(o.dte,1)}</td>
+      <td class="t">${fmt(o.strike,0)}</td><td class="t">${fmt(o.mark_iv)}</td>
+      <td class="t">${o.bid===null?'<span class="mut">sem</span>':fmt(o.bid,4)}</td>
+      <td class="t">${o.ask===null?'<span class="mut">sem</span>':fmt(o.ask,4)}</td>
+      <td class="t">${o.spread_pct===null?'—':fmt(o.spread_pct*100,1)}</td>
+      <td class="t">${fmt(o.oi,1)}</td><td class="t">${fmt(o.volume_usd,0)}</td>
+      <td>${o.liquid?pill('p-ok','sim'):pill('p-mut','não')}</td></tr>`).join('')}</table>`;
+  const sel=$('s-exp'); if(sel.options.length<=1&&j.expiries){
+    j.expiries.forEach(e=>{const o=document.createElement('option');o.value=e;o.textContent=e;sel.appendChild(o);});
   }
 }
-$('#reload').onclick=loadDay;
-$('#dayPick').onchange=loadDay;
 
-async function saveSingle(id){
-  const fx=DAY.fixtures.find(f=>f.id===id); if(!fx||!fx.best)return;
-  await api('/api/bets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    match_date:DAY.day,label:`${fx.home.name} x ${fx.away.name}`,market:fx.best.market,
-    selection:fx.best.label,odd:fx.best.odd,stake:fx.stake?fx.stake.stake:0,prob:fx.best.prob})});
-  toast('Bilhete registrado');
-}
-async function saveMultiple(){
-  const m=DAY.multiple; if(!m)return;
-  await api('/api/bets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    match_date:DAY.day,label:`Múltipla ${m.legs.length} pernas`,market:'multipla',
-    selection:m.legs.map(l=>`${l.match}: ${l.label}`).join(' | '),
-    odd:m.combined_odd,stake:m.stake?m.stake.stake:0,prob:m.combined_prob,is_multiple:true,legs:m.legs})});
-  toast('Múltipla registrada');
+async function testProv(which){
+  const ccy=$('p-ccy').value;
+  $('prov-out').innerHTML='<span class="spin"></span>';
+  const j=await (await fetch(`/api/test-provider?which=${which}&ccy=${ccy}`)).json();
+  $('prov-out').innerHTML=Object.entries(j).map(([k,v])=>`
+    <div class="card" style="margin-bottom:8px"><h3>${k}
+      ${v.ok?pill('p-ok','ok '+fmt(v.ms,0)+'ms'):pill('p-bad','falhou')}</h3>
+      ${Object.entries(v).filter(([kk])=>!['ok','ms'].includes(kk))
+        .map(([kk,vv])=>`<div class="kv"><span class="k">${kk}</span>
+        <span class="v">${typeof vv==='object'?JSON.stringify(vv):vv}</span></div>`).join('')}
+    </div>`).join('');
 }
 
-async function loadBets(){
-  const d=await api('/api/bets');
-  const s=d.stats;
-  $('#betKpis').innerHTML=`
-    <div class="kpi"><div class="k">Apostas</div><div class="v">${s.total}</div></div>
-    <div class="kpi"><div class="k">Em aberto</div><div class="v">${s.open}</div></div>
-    <div class="kpi"><div class="k">Taxa de acerto</div><div class="v">${s.hit_rate===null?'—':s.hit_rate+'%'}</div></div>
-    <div class="kpi"><div class="k">Volume apostado</div><div class="v">${fmt(s.staked)}</div></div>
-    <div class="kpi"><div class="k">Lucro</div><div class="v ${s.profit>0?'pos':(s.profit<0?'neg':'')}">${fmt(s.profit)}</div></div>
-    <div class="kpi"><div class="k">ROI</div><div class="v ${s.roi>0?'pos':(s.roi<0?'neg':'')}">${s.roi===null?'—':s.roi+'%'}</div></div>
-    <div class="kpi"><div class="k">CLV médio${s.clv_n?` (${s.clv_n})`:''}</div><div class="v ${s.clv_avg>0?'pos':(s.clv_avg<0?'neg':'')}">${s.clv_avg===null?'—':s.clv_avg+'%'}</div></div>
-    <div class="kpi"><div class="k">Bateu o fechamento</div><div class="v">${s.clv_beat_pct===null?'—':s.clv_beat_pct+'%'}</div></div>`;
-  if(!d.bets.length){$('#betList').innerHTML='<div class="empty">Nenhum bilhete registrado ainda. Registre pelo Painel do dia.</div>';return;}
-  $('#betList').innerHTML=`<div class="small" style="margin-bottom:10px">CLV = odd que você pegou vs. odd de FECHAMENTO. Registrá-la é a forma mais honesta de saber se o modelo acha valor de verdade: CLV positivo consistente em 300+ apostas antecipa lucro de longo prazo.</div>
-  <div style="overflow-x:auto"><table>
-    <tr><th>Data</th><th>Aposta</th><th class="num">Odd</th><th class="num">Stake</th><th class="num">Fechamento</th><th class="num">CLV</th><th>Status</th><th class="num">Lucro</th><th></th></tr>
-    ${d.bets.map(b=>`<tr>
-      <td class="small">${b.match_date}</td>
-      <td><b>${b.label}</b>${b.shadow?' <span class="pill gray">sombra</span>':''}<br><span class="small">${b.selection}</span></td>
-      <td class="num">${b.odd.toFixed(2)}</td>
-      <td class="num">${b.shadow?'<span class="small">—</span>':fmt(b.stake)}</td>
-      <td class="num"><input type="number" step="0.01" min="1.01" style="width:76px;padding:4px 6px;font-size:12.5px" value="${b.closing_odd||''}" id="cl-${b.id}" placeholder="odd">
-        <button class="btn sm ghost" onclick="saveClosing(${b.id})">✓</button></td>
-      <td class="num" style="color:${b.clv>0?'var(--green)':(b.clv<0?'var(--red)':'var(--mut)')}">${b.clv===null||b.clv===undefined?'—':b.clv+'%'}</td>
-      <td>${b.status==='open'?`
-        <button class="btn sm" onclick="settle(${b.id},'won')">Green</button>
-        <button class="btn sm red" onclick="settle(${b.id},'lost')">Red</button>
-        <button class="btn sm ghost" onclick="settle(${b.id},'void')">Anulada</button>`
-        :`<span class="pill ${b.status==='won'?'green':(b.status==='lost'?'red':'gray')}">${{won:'GREEN',lost:'RED',void:'ANULADA'}[b.status]}</span>`}
-      </td>
-      <td class="num" style="color:${b.profit>0?'var(--green)':(b.profit<0?'var(--red)':'var(--mut)')}">${b.status==='open'?'—':fmt(b.profit)}</td>
-      <td><button class="btn sm ghost" onclick="delBet(${b.id})">✕</button></td>
-    </tr>`).join('')}
-  </table></div>`;
-}
-async function saveClosing(id){
-  const v=document.getElementById('cl-'+id).value;
-  if(!v||+v<=1){toast('Informe a odd de fechamento (maior que 1)');return;}
-  const r=await api(`/api/bets/${id}/closing`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({closing_odd:+v})});
-  toast(`CLV registrado: ${r.clv>0?'+':''}${r.clv}%`);loadBets();
-}
-async function settle(id,st){const r=await api(`/api/bets/${id}/settle`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:st})});toast(st==='won'?'Green registrado, banca atualizada':'Resultado registrado');$('#bankTop').textContent=fmt(r.bankroll);loadBets();}
-async function delBet(id){await api('/api/bets/'+id,{method:'DELETE'});loadBets();}
+async function loadTrades(){
+  const j=await (await fetch('/api/trades')).json();
+  const p=await (await fetch('/api/portfolio')).json();
+  const st=j.stats||{};
+  $('stats').innerHTML=[
+    ['trades',st.total||0],['abertos',st.open||0],['fechados',st.closed||0],
+    ['acerto',st.win_rate!==null&&st.win_rate!==undefined?Math.round(st.win_rate*100)+'%':'—'],
+    ['P&L',fmt(st.pnl_total)],['CVL médio',fmt(st.cvl_mean,3)],
+    ['CVL positivo',st.cvl_beat_rate!==null&&st.cvl_beat_rate!==undefined?Math.round(st.cvl_beat_rate*100)+'%':'—'],
+  ].map(([k,v])=>`<div class="card"><div class="lbl">${k}</div><div class="big">${v}</div></div>`).join('');
 
-(async()=>{
-  $('#dayPick').value=localDay(new Date());
-  try{await loadSettings();}catch(e){toast('Configurações não carregaram: '+e.message);}
-  loadDay();
+  $('portfolio').innerHTML=`<div class="grid g4">
+    <div><div class="lbl">posições / teto</div><div class="big">${p.open_positions}/${p.max_positions}</div></div>
+    <div><div class="lbl">vega agregado</div><div class="big">${fmt(p.vega_total,4)}</div>
+      <div class="mut">${fmt(p.vega_pct_bankroll,2)}% do capital (teto ${p.vega_teto_pct}%)
+      ${p.vega_acima_do_teto?pill('p-bad','ACIMA DO TETO'):''}</div></div>
+    <div><div class="lbl">perda em estresse</div><div class="big">${fmt(p.stress_loss_total)}</div>
+      <div class="mut">${fmt(p.stress_pct_bankroll,2)}% do capital</div></div>
+    <div><div class="lbl">por moeda</div><div class="big mono" style="font-size:16px">
+      ${Object.entries(p.per_ccy||{}).map(([k,v])=>k+':'+v).join(' ')||'—'}</div></div>
+    </div><div class="warnbox" style="margin-top:10px">${p.aviso}</div>`;
+
+  const t=j.trades||[];
+  $('trades').innerHTML = t.length? `<table><tr><th>#</th><th>moeda</th><th>estrutura</th>
+    <th class="t">IV ent.</th><th class="t">IV fech.</th><th class="t">CVL</th><th class="t">prêmio</th>
+    <th class="t">estresse</th><th>selo</th><th>status</th><th class="t">P&L</th><th></th></tr>
+    ${t.map(x=>`<tr><td>${x.id}</td><td>${x.ccy}</td><td>${x.structure}</td>
+      <td class="t">${fmt(x.entry_iv)}</td><td class="t">${fmt(x.closing_iv)}</td>
+      <td class="t" style="color:${x.cvl>0?'var(--ok)':(x.cvl<0?'var(--bad)':'inherit')}">${fmt(x.cvl,2)}</td>
+      <td class="t">${fmt(x.premium)}</td><td class="t">${fmt(x.max_loss_stress)}</td>
+      <td>${x.grade?pill(x.grade==='A'?'p-ok':(x.grade==='B'?'p-warn':'p-bad'),x.grade):'—'}</td>
+      <td>${x.status}</td><td class="t">${fmt(x.pnl)}</td>
+      <td class="row" style="gap:4px">
+        ${x.status==='open'?`<button onclick="closeIv(${x.id})">IV fech.</button>
+        <button onclick="settle(${x.id})">baixar</button>`:''}
+        <button class="dgr" onclick="del(${x.id})">×</button></td></tr>`).join('')}</table>`
+    : '<span class="mut">nenhum trade registrado — e nada será registrado sem o seu clique.</span>';
+}
+
+async function addTrade(){
+  const b={ccy:$('n-ccy').value,structure:$('n-struct').value,direction:$('n-dir').value,
+    entry_iv:num($('n-iv').value),premium:num($('n-prem').value),notional:num($('n-not').value),
+    vega:num($('n-vega').value),max_loss_stress:num($('n-stress').value),
+    expiry:$('n-exp').value||null,grade:$('n-grade').value};
+  const r=await fetch('/api/trades',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(b)});
+  if(!r.ok){alert('erro: '+(await r.text()));return;}
+  ['n-iv','n-prem','n-not','n-vega','n-stress'].forEach(i=>$(i).value='');
+  loadTrades();
+}
+function num(v){return v===''||v===null?null:Number(v);}
+async function settle(id){
+  const pnl=prompt('P&L realizado (negativo se perdeu):','0'); if(pnl===null)return;
+  await fetch(`/api/trades/${id}/settle`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status:'closed',pnl:Number(pnl)})});
+  loadTrades();
+}
+async function closeIv(id){
+  const iv=prompt('IV no fechamento/expiração (%) — alimenta o CVL:',''); if(!iv)return;
+  const j=await (await fetch(`/api/trades/${id}/closing-iv`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({closing_iv:Number(iv)})})).json();
+  alert('CVL registrado: '+(j.cvl===null?'— (sem IV de entrada)':j.cvl+' pts'));
+  loadTrades();
+}
+async function del(id){ if(!confirm('apagar trade '+id+'?'))return;
+  await fetch('/api/trades/'+id,{method:'DELETE'}); loadTrades(); }
+
+async function loadCfg(){
+  const j=await (await fetch('/api/settings')).json(); S=j; fillCfg();
+}
+function fillCfg(){
+  const m={'c-bankroll':'bankroll','c-cur':'display_currency','c-maxpos':'max_positions',
+    'c-vega':'max_vega_pct','c-kelly':'kelly_fraction','c-cap':'stake_cap_pct',
+    'c-mw':'model_weight','c-dte':'target_dte','c-bump':'stress_iv_bump',
+    'c-rvmult':'stress_rv_multiple','c-gap':'stress_gap_sigma','c-spread':'max_spread_pct',
+    'c-ccys':'currencies','c-ttlchain':'ttl_chain','c-ttlcand':'ttl_candles','c-days':'candle_days'};
+  Object.entries(m).forEach(([el,k])=>{ if($(el)) $(el).value=S[k]; });
+  $('c-defrisk').checked=!!S.defined_risk_only;
+  $('c-naked').checked=!!S.naked_short_enabled;
+  $('c-force').value=S.provider_force||'';
+  $('cfg-bump').textContent=S.stress_iv_bump; $('cfg-rvmult').textContent=S.stress_rv_multiple;
+  $('cfg-gap').textContent=S.stress_gap_sigma;
+  const sel=$('n-struct'); sel.innerHTML='';
+  (S.defined_risk_only?['iron_condor','put_spread','call_spread','calendar_spread',
+    'diagonal_spread','butterfly']:['iron_condor','put_spread','call_spread','calendar_spread',
+    'diagonal_spread','butterfly','short_strangle','short_straddle','short_put','short_call'])
+    .forEach(x=>{const o=document.createElement('option');o.value=x;o.textContent=x;sel.appendChild(o);});
+}
+async function saveCfg(){
+  const b={bankroll:Number($('c-bankroll').value),display_currency:$('c-cur').value,
+    max_positions:Number($('c-maxpos').value),max_vega_pct:Number($('c-vega').value),
+    kelly_fraction:Number($('c-kelly').value),stake_cap_pct:Number($('c-cap').value),
+    model_weight:Number($('c-mw').value),target_dte:Number($('c-dte').value),
+    stress_iv_bump:Number($('c-bump').value),stress_rv_multiple:Number($('c-rvmult').value),
+    stress_gap_sigma:Number($('c-gap').value),max_spread_pct:Number($('c-spread').value),
+    currencies:$('c-ccys').value,ttl_chain:Number($('c-ttlchain').value),
+    ttl_candles:Number($('c-ttlcand').value),candle_days:Number($('c-days').value),
+    defined_risk_only:$('c-defrisk').checked,naked_short_enabled:$('c-naked').checked,
+    provider_force:$('c-force').value};
+  const j=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(b)})).json();
+  S=j.settings; fillCfg(); alert('configurações salvas'); load(true);
+}
+async function exportBackup(){
+  const j=await (await fetch('/api/backup')).json();
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(j,null,1)],{type:'application/json'}));
+  a.download='sigmadesk-backup-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+}
+async function importBackup(inp){
+  const f=inp.files[0]; if(!f)return;
+  const txt=await f.text();
+  const j=await (await fetch('/api/backup',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:txt})).json();
+  alert('restaurado: '+JSON.stringify(j)); location.reload();
+}
+
+(async function init(){
+  const v=await (await fetch('/api/version')).json();
+  $('ver').textContent=v.version+' · '+v.codename;
+  $('etapa').textContent='etapa '+v.etapa;
+  $('f-ver').textContent=v.version;
+  const l=await (await fetch('/api/labels')).json();
+  await loadCfg(); await load();
 })();
 </script>
 </body>
