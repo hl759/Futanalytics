@@ -26,7 +26,7 @@ os.environ.setdefault("PYTHONHASHSEED", "0")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import db  # noqa: E402
+from app import db, provider  # noqa: E402
 from app.main import app  # noqa: E402
 
 fails: list[str] = []
@@ -97,7 +97,7 @@ def main() -> int:
                          ({"max_positions": 0}, "zero posições"),
                          ({"currencies": "BTC,SOL"}, "SOL fora do escopo v1"),
                          ({"portfolio_min_grade": "Z"}, "grade inexistente"),
-                         ({"provider_force": "binance"}, "Binance removido (geo-bloqueio)")):
+                         ({"provider_force": "nyse"}, "provider inexistente")):
             k = next(iter(bad))
             r = c.post("/api/settings", json=bad, timeout=60)
             check(r.status_code == 422, f"{why} -> 422", f"-> {r.status_code}")
@@ -132,6 +132,42 @@ def main() -> int:
         check(r.json().get("saved") == {"target_dte": 60.0, "max_positions": 5},
               "saved ecoa exatamente o que entrou", f"-> {r.json().get('saved')}")
         c.post("/api/settings", json={"target_dte": 45, "max_positions": 4}, timeout=60)
+
+        # REGRESSÃO dos dois bugs achados ao investigar "posso escolher Binance?"
+        # (1) `binance_enabled` era setting MORTA: declarada, aceita pelo POST,
+        #     invalidava cache — e nunca era lida por caminho nenhum de código.
+        s_now = jget(c, "/api/settings")
+        check("binance_enabled" not in s_now,
+              "binance_enabled REMOVIDO (era toggle que mentia: ligar não fazia nada)")
+        r = c.post("/api/settings", json={"binance_enabled": True}, timeout=60)
+        check("binance_enabled" not in (r.json().get("saved") or {}),
+              "campo morto não volta a ser aceito e gravado em silêncio",
+              f"-> {r.status_code}")
+        # (2) forçar "binance" caía no `else` do dispatch e chamava kraken_ohlcv:
+        #     pediria Binance e receberia velas da KRAKEN rotuladas como Binance.
+        r = c.post("/api/settings", json={"provider_force": "binance"}, timeout=60)
+        check(r.status_code == 200, "provider_force='binance' é aceito (rota real hoje)",
+              f"-> {r.status_code}")
+        called = []
+        orig_bn, orig_kr = provider.bn_klines, provider.kraken_ohlcv
+        async def _spy_bn(*a, **k):
+            called.append("binance"); return await orig_bn(*a, **k)
+        async def _spy_kr(*a, **k):
+            called.append("kraken"); return await orig_kr(*a, **k)
+        provider.bn_klines, provider.kraken_ohlcv = _spy_bn, _spy_kr
+        db.cache_clear()
+        jget(c, "/api/history?ccy=BTC&days=60")
+        provider.bn_klines, provider.kraken_ohlcv = orig_bn, orig_kr
+        check("binance" in called, "provider_force='binance' chama bn_klines",
+              f"-> chamadas: {called}")
+        # Kraken TAMBÉM é chamado, e isso está certo: Binance falha (geo-bloqueio)
+        # e a cadeia segue. O bug era Kraken ser chamado NO LUGAR de Binance —
+        # Binance nunca era invocada e as velas vinham de outra fonte rotuladas
+        # como Binance. O invariante é a ORDEM, não a ausência.
+        check(called[0] == "binance",
+              "...e Binance é a PRIMEIRA chamada (antes era pulada e kraken respondia no lugar)",
+              f"-> ordem: {called}")
+        c.post("/api/settings", json={"provider_force": "auto"}, timeout=60)
 
         # invalidação de cache: o handler tinha aqui um `for ...: pass` — não
         # invalidava nada, então trocar o universo continuava servindo a

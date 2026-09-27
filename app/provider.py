@@ -838,9 +838,12 @@ async def candles_with_fallback(ccy: str = "BTC", days: int = 400,
     confirmado por teste ("restricted location").
     """
     debug: dict = {"asked": [], "errors": {}}
+    # Binance fica FORA da ordem automática: api.binance.com é geo-bloqueada no
+    # IP do Render free (EUA). Entra só quando pedida por `force`, para quem roda
+    # fora de região restrita — e mesmo assim só velas SPOT, nunca opções.
     order = ["deribit", "coinbase", "kraken"]
     if force:
-        order = [force] + [p for p in order if p != force]
+        order = [force] + [q for q in order + ["binance"] if q != force]
     for src in order:
         debug["asked"].append(src)
         if breaker_skip(src):
@@ -850,6 +853,12 @@ async def candles_with_fallback(ccy: str = "BTC", days: int = 400,
             coro = dr_ohlcv(ccy, "1D", days)
         elif src == "coinbase":
             coro = cb_candles(ccy, 86400, days)
+        elif src == "binance":
+            # BUG: antes não havia ramo para "binance" e o `else` final pegava
+            # tudo — então forçar Binance chamava kraken_ohlcv e devolvia velas
+            # da KRAKEN rotuladas como Binance. Silencioso e errado nas duas
+            # pontas: dado de outra fonte, com atribuição falsa.
+            coro = bn_klines(ccy, "1d", days)
         else:
             coro = kraken_ohlcv(ccy, 1440, days)
         data, err = await _guarded(coro, src, deadline)

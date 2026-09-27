@@ -80,7 +80,12 @@ class Settings(BaseModel):
 
     # provedor
     provider_force: str = ""             # "" = cadeia automática com fallback
-    binance_enabled: bool = False        # geo-bloqueada em IP dos EUA (Render)
+    # `binance_enabled` foi REMOVIDO: era uma setting MORTA. Declarada aqui,
+    # aceita pelo POST /api/settings, invalidava cache — e nunca era LIDA por
+    # caminho nenhum. Ligar não fazia nada. Um toggle que mente é pior que um
+    # toggle ausente: o usuário acredita que habilitou uma fonte de dados.
+    # O que existe de verdade é `provider_force="binance"` (velas SPOT via
+    # espelho público data-api.binance.vision), útil só fora de região restrita.
 
 
 DEFAULTS = Settings()
@@ -238,7 +243,6 @@ class SettingsIn(BaseModel):
     candle_days: int | None = None
     dvol_days: int | None = None
     provider_force: str | None = None
-    binance_enabled: bool | None = None
 
 
 # Limites de sanidade. BUG PEGO NO SMOKE TEST DA ETAPA 0: POST /api/settings
@@ -271,7 +275,7 @@ BOUNDS: dict[str, tuple[float | None, float | None]] = {
 }
 # mudar qualquer uma destas invalida as leituras em cache
 _INVALIDATES_CACHE = {"currencies", "candle_days", "dvol_days", "provider_force",
-                      "binance_enabled", "min_oi", "max_spread_pct", "target_dte"}
+                      "min_oi", "max_spread_pct", "target_dte"}
 
 
 @app.post("/api/settings")
@@ -313,7 +317,7 @@ def save_settings(body: SettingsIn):
             rejected[k] = f"grade inválido: {v} (A, B ou C)"
             continue
         if k == "provider_force" and v not in ("", "auto", "deribit", "coinbase",
-                                               "kraken", "demo"):
+                                               "kraken", "binance", "demo"):
             rejected[k] = f"provider desconhecido: {v}"
             continue
         b = BOUNDS.get(k)
