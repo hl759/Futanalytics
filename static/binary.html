@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BinaryMaster · Sinal M1/M5 por confluência</title>
+<style>
+:root{
+  --bg:#0a0e17; --bg2:#0e1422; --card:#131b2e; --card2:#182441; --line:#233252;
+  --txt:#e8eef8; --mut:#8ea2c0; --green:#2fd48a; --green-d:#0e3a28;
+  --red:#f0616d; --red-d:#3d1719; --amber:#f5b942; --amber-d:#3a2c10;
+  --blue:#5aa2ff; --blue-d:#142f52; --violet:#b48bff; --radius:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;min-height:100vh}
+a{color:var(--blue)}
+header{position:sticky;top:0;z-index:50;background:rgba(10,14,23,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.hwrap{max-width:1240px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.logo{font-size:19px;font-weight:800}.logo .g{color:var(--green)}.logo .r{color:var(--red)}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:none;border:none;color:var(--mut);font:700 14px inherit;padding:8px 14px;border-radius:9px;cursor:pointer}
+nav button.active{background:var(--card2);color:var(--txt)}
+nav button:hover{color:var(--txt)}
+.hlink{margin-left:auto;font-size:13px;color:var(--mut)}
+main{max-width:1240px;margin:0 auto;padding:22px 20px 90px}
+.warn{background:linear-gradient(180deg,#2a1f08,#1c1507);border:1px solid #6b5218;color:#f2cf7d;border-radius:var(--radius);padding:12px 16px;font-size:13px;margin-bottom:18px}
+.warn b{color:#ffe1a1}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.card h3{font-size:15px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card h3 .n{background:var(--card2);border:1px solid var(--line);width:24px;height:24px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--blue)}
+.grid2{display:grid;gap:16px}
+@media(min-width:1020px){.grid2{grid-template-columns:460px 1fr}.grid2.eq{grid-template-columns:1fr 1fr}}
+label.fl{display:block;font-size:12px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 5px}
+select,input[type=text],input[type=number]{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:9px 11px;font:600 14px inherit}
+select:focus,input:focus{outline:none;border-color:var(--blue)}
+input[type=range]{width:100%}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.frow3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:520px){.frow,.frow3{grid-template-columns:1fr 1fr}}
+.drop{border:2px dashed #33507e;border-radius:12px;padding:22px 14px;text-align:center;cursor:pointer;transition:.15s;background:#0d1526}
+.drop:hover,.drop.over{border-color:var(--blue);background:#101b33}
+.drop .big{font-size:30px}.drop p{color:var(--mut);font-size:13px;margin-top:6px}
+.drop kbd{background:var(--card2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12px}
+#preview{display:none;margin-top:10px;position:relative}
+#preview img{width:100%;border-radius:10px;border:1px solid var(--line);display:block}
+#preview button{position:absolute;top:8px;right:8px;background:rgba(10,14,23,.85);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:5px 10px;cursor:pointer;font-weight:700}
+.candles{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.candles button{border:1px solid var(--line);background:var(--bg2);border-radius:8px;padding:7px 12px;font:800 13px inherit;cursor:pointer;color:var(--txt)}
+.candles button.g{border-color:#1d5c40;color:var(--green)}
+.candles button.r{border-color:#6e262b;color:var(--red)}
+.candles button:active{transform:scale(.95)}
+#seqview{font:800 14px ui-monospace,monospace;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;min-height:42px;margin-top:8px;letter-spacing:2px}
+#seqview .G{color:var(--green)}#seqview .R{color:var(--red)}#seqview .D{color:var(--amber)}
+button.btn{background:var(--green);color:#05271a;border:none;font:800 15px inherit;padding:13px 18px;border-radius:11px;cursor:pointer;width:100%;margin-top:14px}
+button.btn:hover{filter:brightness(1.07)}
+button.btn:disabled{opacity:.55;cursor:wait}
+button.btn2{background:var(--card2);color:var(--txt);border:1px solid var(--line);font:700 13.5px inherit;padding:9px 14px;border-radius:9px;cursor:pointer}
+button.btn2:hover{border-color:var(--blue)}
+.pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11.5px;font-weight:800;letter-spacing:.4px}
+.pill.green{background:var(--green-d);color:var(--green)}.pill.red{background:var(--red-d);color:var(--red)}
+.pill.amber{background:var(--amber-d);color:var(--amber)}.pill.blue{background:var(--blue-d);color:var(--blue)}
+.pill.gray{background:#23304a;color:var(--mut)}.pill.violet{background:#2a2145;color:var(--violet)}
+.decision{text-align:center;padding:22px 10px;border-radius:12px;margin-bottom:14px;border:1px solid var(--line)}
+.decision.call{background:linear-gradient(180deg,#0d3524,#0a0e17);border-color:#1d5c40}
+.decision.put{background:linear-gradient(180deg,#381316,#0a0e17);border-color:#6e262b}
+.decision.flat{background:linear-gradient(180deg,#2c230c,#0a0e17);border-color:#6b5218}
+.decision .d1{font-size:30px;font-weight:900;letter-spacing:.5px}
+.decision.call .d1{color:var(--green)}.decision.put .d1{color:var(--red)}.decision.flat .d1{color:var(--amber)}
+.decision .d2{color:var(--mut);font-size:13px;margin-top:4px}
+.scorebar{height:14px;border-radius:99px;background:#1a2540;position:relative;overflow:hidden;margin:10px 0 4px}
+.scorebar .fill{position:absolute;top:0;bottom:0;border-radius:99px}
+.scorebar .mid{position:absolute;top:-2px;bottom:-2px;left:50%;width:2px;background:#5a6f92}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px 0}
+.kpi{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:10px 12px}
+.kpi .l{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;font-weight:700}
+.kpi .v{font-size:18px;font-weight:800;margin-top:2px}
+.kpi .s{font-size:11.5px;color:var(--mut)}
+.mod{border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:8px;background:var(--bg2)}
+.mod .mh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mod .mn{font-weight:800;font-size:13.5px}
+.mod .bar{height:8px;background:#1a2540;border-radius:99px;margin-top:8px;position:relative;overflow:hidden}
+.mod .bar i{position:absolute;top:0;bottom:0;border-radius:99px}
+.mod ul{margin:6px 0 0 16px;font-size:12.5px;color:var(--mut)}
+.mod ul li{margin:2px 0}.mod ul li.pro{color:#c9f2dd}.mod ul li.con{color:#f3c6c9}
+.procon{display:grid;gap:12px}@media(min-width:760px){.procon{grid-template-columns:1fr 1fr}}
+.procon .box{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+.procon h4{font-size:13px;margin-bottom:8px}
+.procon ul{margin-left:16px;font-size:12.5px;color:var(--mut)}.procon ul li{margin:3px 0}
+ol.steps{margin-left:18px;font-size:13.5px}.ol.steps li,ol.steps li{margin:5px 0}
+.chk{display:grid;gap:6px;margin-top:6px}
+.chk .it{display:flex;gap:9px;align-items:flex-start;font-size:13px;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:8px 11px}
+.strat{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:var(--card)}
+.strat .sh{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.strat .sn{font-weight:800;font-size:15px}
+.strat dl{display:grid;gap:6px;font-size:13px;margin-top:8px}
+.strat dt{color:var(--blue);font-weight:800;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px}
+.strat dd{color:#c6d3e8}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{color:var(--mut);text-align:left;font-weight:700;padding:7px 8px;border-bottom:1px solid var(--line);font-size:11.5px;text-transform:uppercase;letter-spacing:.4px}
+td{padding:8px;border-bottom:1px solid #1d2a44}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.tab{display:none}.tab.active{display:block}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid #05271a;border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-3px}
+@keyframes sp{to{transform:rotate(360deg)}}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#1b2947;border:1px solid var(--blue);color:var(--txt);padding:10px 18px;border-radius:11px;font-weight:700;display:none;z-index:99}
+details{margin-top:8px}summary{cursor:pointer;color:var(--blue);font-weight:700;font-size:13px}
+.foot{color:var(--mut);font-size:12px;margin-top:26px;text-align:center}
+.rsiwrap{display:flex;align-items:center;gap:10px}
+.rsiwrap output{font:800 15px inherit;min-width:44px;text-align:center;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:5px}
+.seg{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.seg button{flex:1;min-width:70px;background:var(--bg2);border:1px solid var(--line);color:var(--mut);border-radius:9px;padding:8px 6px;font:700 12.5px inherit;cursor:pointer}
+.seg button.on{border-color:var(--blue);color:var(--txt);background:#15294d}
+.seg button.on.g{border-color:var(--green);color:var(--green);background:#0d2b20}
+.seg button.on.r{border-color:var(--red);color:var(--red);background:#331114}
+</style>
+</head>
+<body>
+<header>
+  <div class="hwrap">
+    <div class="logo">Binary<span class="g">Master</span> <span style="font-size:12px;color:var(--mut)">M1 · M5</span></div>
+    <nav>
+      <button data-tab="t-analyze" class="active">📊 Analisar</button>
+      <button data-tab="t-strat">📚 Estratégias Mestre</button>
+      <button data-tab="t-money">💰 Gestão</button>
+      <button data-tab="t-journal">📝 Diário</button>
+    </nav>
+    <a class="hlink" href="/">← FutAnalytics</a>
+  </div>
+</header>
+<main>
+  <div class="warn">⚠️ <b>Expectativa honesta:</b> binárias têm payout &lt;100% — com payout 82% você precisa de ~55% de acerto só para <b>empatar</b>. Nenhuma ferramenta do mundo garante lucro; este app organiza o melhor conhecimento público em um filtro de confluências e diz <b>SEM ENTRADA</b> quando o setup é ruim — e ficar de fora é o que salva a banca. Opere primeiro no <b>DEMO</b>. Nunca arrisque dinheiro que você não pode perder.</div>
+
+  <!-- ================= ANALISAR ================= -->
+  <section id="t-analyze" class="tab active">
+    <div class="grid2">
+      <div>
+        <div class="card">
+          <h3><span class="n">1</span> Cole o print do gráfico</h3>
+          <div class="drop" id="drop">
+            <div class="big">📋</div>
+            <div><b>Clique</b> ou <b>arraste</b> o print aqui<br>ou aperte <kbd>Ctrl</kbd>+<kbd>V</kbd> em qualquer lugar</div>
+            <p>Maximize os CANDLES (30–60 velas) · TradingView, Quotex, IQ, Pocket, Exnova</p>
+            <input type="file" id="file" accept="image/*" style="display:none">
+          </div>
+          <div id="preview"><img id="pimg" alt="print"><button id="prm" title="remover">✕</button></div>
+          <div id="vision-mini" style="font-size:12.5px;color:var(--mut);margin-top:8px"></div>
+        </div>
+
+        <div class="card">
+          <h3><span class="n">2</span> Contexto da operação</h3>
+          <div class="frow">
+            <div><label class="fl">Ativo</label><input type="text" id="symbol" placeholder="EURUSD-OTC" value="EURUSD-OTC"></div>
+            <div><label class="fl">Payout %</label><input type="number" id="payout" value="82" min="50" max="98"></div>
+          </div>
+          <div class="frow">
+            <div><label class="fl">Expiração desejada</label>
+              <select id="expiry"><option value="auto">Auto (motor decide M1/M5)</option><option value="M1">M1 (60s)</option><option value="M5">M5 (5min)</option></select></div>
+            <div><label class="fl">Conta</label>
+              <select id="account"><option value="demo">Demo (treino)</option><option value="real">Real</option></select></div>
+          </div>
+          <div class="frow">
+            <div><label class="fl">Sessão / horário</label>
+              <select id="session">
+                <option value="">Não sei / agora</option>
+                <option value="overlap">Overlap Londres+NY (9h30–12h BR) ⭐</option>
+                <option value="londres">Londres / manhã BR</option>
+                <option value="nova_york">Nova York / tarde BR</option>
+                <option value="asia">Asiática / madrugada ⚠️</option>
+                <option value="fechamento">Noite pós-NY ⚠️</option>
+              </select></div>
+            <div><label class="fl">Notícias (calendário)</label>
+              <select id="news">
+                <option value="">Sem notícia próxima</option>
+                <option value="medio">🟡 Médio impacto próximo</option>
+                <option value="alto">🔴 ALTO impacto ±10min (VETO)</option>
+              </select></div>
+          </div>
+          <label class="fl">Últimas velas (antiga → recente) — clique ou deixe a visão detectar</label>
+          <div class="candles">
+            <button class="g" data-c="G">+ Verde</button>
+            <button class="r" data-c="R">+ Vermelha</button>
+            <button data-c="D" style="color:var(--amber)">+ Doji</button>
+            <button id="seqback">⌫</button>
+            <button id="seqclear">Limpar</button>
+          </div>
+          <div id="seqview"><span style="color:var(--mut);letter-spacing:0;font-weight:400">vazio = usa a visão do print</span></div>
+        </div>
+
+        <div class="card">
+          <h3><span class="n">3</span> Leitura do gráfico <span style="font-weight:400;color:var(--mut);font-size:12px">(quanto mais preencher, melhor)</span></h3>
+          <label class="fl">Tendência (se vazio, usa a visão)</label>
+          <select id="trend">
+            <option value="auto">Auto (pela visão do print)</option>
+            <option value="forte_alta">🚀 Alta forte (topos/fundos ascendentes)</option>
+            <option value="alta">📈 Alta</option>
+            <option value="lateral">➡️ Lateral / range</option>
+            <option value="baixa">📉 Baixa</option>
+            <option value="forte_baixa">💥 Baixa forte</option>
+          </select>
+          <div class="frow">
+            <div><label class="fl">Preço está…</label>
+              <select id="price_pos"><option value="">Auto (visão)</option><option value="topo">No TOPO (resistência)</option><option value="meio">No MEIO do range</option><option value="fundo">No FUNDO (suporte)</option></select></div>
+            <div><label class="fl">Suporte / Resistência</label>
+              <select id="sr">
+                <option value="">Não identificado</option>
+                <option value="suporte">Em SUPORTE → CALL</option>
+                <option value="resistencia">Em RESISTÊNCIA → PUT</option>
+                <option value="rompeu_cima">ROMPEU p/ cima → CALL M5</option>
+                <option value="rompeu_baixo">ROMPEU p/ baixo → PUT M5</option>
+                <option value="falso_rompimento_cima">FALSO romp. topo → PUT ⚡</option>
+                <option value="falso_rompimento_baixo">FALSO romp. fundo → CALL ⚡</option>
+                <option value="flip_alta">Flip: resist virou suporte → CALL</option>
+                <option value="flip_baixa">Flip: suporte virou resist → PUT</option>
+                <option value="fundo_duplo">Fundo duplo → CALL</option>
+                <option value="topo_duplo">Topo duplo → PUT</option>
+                <option value="meio_nada">Meio do nada (sem nível)</option>
+              </select></div>
+          </div>
+          <div class="frow3">
+            <div><label class="fl">Corpo últ. vela</label>
+              <select id="candle_body"><option value="">—</option><option value="grande">Grande</option><option value="medio">Médio</option><option value="pequeno">Pequeno</option><option value="doji">Doji</option></select></div>
+            <div><label class="fl">Pavio ↑</label>
+              <select id="wick_top"><option value="">—</option><option value="grande">Longo</option><option value="pequeno">Curto</option></select></div>
+            <div><label class="fl">Pavio ↓</label>
+              <select id="wick_bottom"><option value="">—</option><option value="grande">Longo</option><option value="pequeno">Curto</option></select></div>
+          </div>
+          <label class="fl">Padrão de candle</label>
+          <select id="pattern">
+            <option value="auto">Auto / nenhum claro</option>
+            <optgroup label="Alta 🟢"><option value="engolfo_alta">Engolfo de alta</option><option value="martelo">Martelo / Pinbar alta</option><option value="morning_star">Estrela da manhã</option><option value="piercing">Piercing</option><option value="three_soldiers">3 soldados</option></optgroup>
+            <optgroup label="Baixa 🔴"><option value="engolfo_baixa">Engolfo de baixa</option><option value="estrela_cadente">Estrela cadente / Pinbar baixa</option><option value="evening_star">Estrela da noite</option><option value="dark_cloud">Nuvem negra</option><option value="three_crows">3 corvos</option></optgroup>
+            <option value="doji">Doji / indecisão</option>
+          </select>
+          <label class="fl">RSI (valor na tela) — <span id="rsilbl" style="color:var(--mut)">não informado</span></label>
+          <div class="rsiwrap"><input type="range" id="rsi" min="0" max="100" value="50"><output id="rsiv">—</output></div>
+          <div class="seg" style="margin-top:4px"><button id="rsioff" class="on">Sem RSI</button><button id="rsion">Usar valor</button></div>
+          <div class="frow" style="margin-top:6px">
+            <div><label class="fl">Estocástico zona</label>
+              <select id="stoch_zone"><option value="">—</option><option value="sobrevendido">Sobrevendido (&lt;20)</option><option value="sobrecomprado">Sobrecomprado (&gt;80)</option></select></div>
+            <div><label class="fl">Estocástico cruzamento</label>
+              <select id="stoch_cross"><option value="">—</option><option value="cruzou_cima">Cruzou p/ CIMA 🟢</option><option value="cruzou_baixo">Cruzou p/ BAIXO 🔴</option></select></div>
+          </div>
+          <div class="frow">
+            <div><label class="fl">EMAs 9/21/50</label>
+              <select id="ema_stack"><option value="">—</option><option value="alta_alinhada">Alinhadas COMPRA</option><option value="baixa_alinhada">Alinhadas VENDA</option><option value="emaranhada">Emaranhadas (range)</option></select></div>
+            <div><label class="fl">MACD</label>
+              <select id="macd"><option value="">—</option><option value="alta">Comprador 🟢</option><option value="baixa">Vendedor 🔴</option></select></div>
+          </div>
+          <div class="frow">
+            <div><label class="fl">Bollinger</label>
+              <select id="bollinger"><option value="">—</option><option value="fora_cima">Fechou FORA acima → PUT</option><option value="fora_baixo">Fechou FORA abaixo → CALL</option><option value="tocou_superior">Tocou superior</option><option value="tocou_inferior">Tocou inferior</option><option value="meio">No meio</option><option value="squeeze">SQUEEZE (cuidado!) ⚠️</option></select></div>
+            <div><label class="fl">Volume</label>
+              <select id="volume"><option value="">—</option><option value="alto_compra">Alto na compra 🟢</option><option value="alto_venda">Alto na venda 🔴</option><option value="fraco">Fraco / caindo ⚠️</option></select></div>
+          </div>
+          <div class="frow">
+            <div><label class="fl">SMC / ICT</label>
+              <select id="smc">
+                <option value="">Nenhum / não sei</option>
+                <option value="bos_alta">BOS alta → CALL</option><option value="bos_baixa">BOS baixa → PUT</option>
+                <option value="choch_alta">CHOCH alta → CALL</option><option value="choch_baixa">CHOCH baixa → PUT</option>
+                <option value="ob_alta">Order Block alta → CALL</option><option value="ob_baixa">Order Block baixa → PUT</option>
+                <option value="fvg_alta">FVG comprador → CALL</option><option value="fvg_baixa">FVG vendedor → PUT</option>
+                <option value="sweep_fundo">Sweep de fundo → CALL ⚡</option><option value="sweep_topo">Sweep de topo → PUT ⚡</option>
+                <option value="discount">Zona discount → CALL</option><option value="premium">Zona premium → PUT</option>
+              </select></div>
+            <div><label class="fl">Volatilidade</label>
+              <select id="volatility"><option value="">Auto (visão)</option><option value="morta">Morta (parado) ⚠️</option><option value="normal">Normal</option><option value="alta">Alta</option><option value="extrema">Extrema ⚠️</option></select></div>
+          </div>
+          <button class="btn" id="go">⚡ ANALISAR PRÓXIMA VELA</button>
+          <p style="font-size:12px;color:var(--mut);margin-top:8px;text-align:center">Funciona só com o print. Preencher os campos aumenta a precisão.</p>
+        </div>
+      </div>
+
+      <div>
+        <div class="card" id="result" style="display:none">
+          <div class="decision flat" id="r-dec"><div class="d1" id="r-d1">—</div><div class="d2" id="r-d2"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mut)"><span>PUT −100</span><b id="r-score">0</b><span>+100 CALL</span></div>
+          <div class="scorebar"><div class="fill" id="r-fill"></div><div class="mid"></div></div>
+          <div class="kpis">
+            <div class="kpi"><div class="l">Expiração</div><div class="v" id="r-exp">—</div><div class="s" id="r-expwhy"></div></div>
+            <div class="kpi"><div class="l">Setup</div><div class="v" id="r-stars">—</div><div class="s" id="r-conf"></div></div>
+            <div class="kpi"><div class="l">Acerto est.</div><div class="v" id="r-win">—</div><div class="s" id="r-be"></div></div>
+            <div class="kpi"><div class="l">Stake sugerida</div><div class="v" id="r-stake">—</div><div class="s">% da banca</div></div>
+          </div>
+          <div id="r-veto"></div>
+          <h3 style="margin-top:6px">📋 Plano de entrada</h3>
+          <ol class="steps" id="r-plan"></ol>
+          <h3 style="margin-top:14px">⚖️ Prós × Contras</h3>
+          <div class="procon"><div class="box"><h4 style="color:var(--green)">✅ A favor</h4><ul id="r-pros"></ul></div>
+          <div class="box"><h4 style="color:var(--amber)">⚠️ Atenção / contra</h4><ul id="r-cons"></ul></div></div>
+          <h3 style="margin-top:14px">🧠 Voto das 12 escolas <span style="font-weight:400;color:var(--mut);font-size:12px">(clique para expandir)</span></h3>
+          <div id="r-mods"></div>
+          <h3 style="margin-top:14px">✅ Checklist pré-entrada</h3>
+          <div class="chk" id="r-chk"></div>
+          <h3 style="margin-top:14px">👁️ O que a visão viu no print</h3>
+          <div id="r-vis" style="font-size:13px;color:var(--mut)"></div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn2" id="tojournal">📝 Enviar p/ Diário</button>
+            <button class="btn2" id="copyres">📋 Copiar resumo</button>
+          </div>
+        </div>
+        <div class="card" id="empty">
+          <h3>⬅️ Como funciona</h3>
+          <ol class="steps">
+            <li><b>Cole o print</b> do gráfico de candles (<kbd>Ctrl</kbd>+<kbd>V</kbd>). A visão detecta velas, tendência e range automaticamente.</li>
+            <li><b>Complete o contexto</b> (payout, RSI, S/R…) — opcional, mas cada campo aumenta a precisão.</li>
+            <li><b>Clique em ANALISAR</b>: 12 módulos (price action JP, SMC/ICT 🇺🇸, trend 🇺🇸, reversão 🇪🇺, quant 🇷🇺, disciplina 🇨🇳, scalping 🇧🇷…) votam e o motor dá a ordem <b>CALL / PUT / SEM ENTRADA</b> com expiração <b>M1 ou M5</b>.</li>
+          </ol>
+          <details><summary>Por que às vezes dá SEM ENTRADA?</summary>
+            <p style="font-size:13px;color:var(--mut);margin-top:6px">Porque a matemática exige: com payout 82%, acertar 54% empata e 58% lucra pouco. Entrar em setup B/C com 50–52% de acerto <b>quebra a banca devagar</b>. O filtro existe para te tirar dessas entradas — profissionais ficam de fora 70–80% do tempo.</p>
+          </details>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ESTRATÉGIAS ================= -->
+  <section id="t-strat" class="tab">
+    <div class="card"><h3>📚 Biblioteca Mestre — 12 setups das escolas mundiais</h3>
+      <p style="color:var(--mut);font-size:13px">O motor de análise aplica estes setups automaticamente. Estude-os para entender <b>por que</b> cada sinal sai — ferramenta sem operador educado vira aposta.</p>
+      <div class="seg" id="schoolfilter" style="margin-top:10px">
+        <button data-f="" class="on">Todas</button><button data-f="Americana">🇺🇸 Americana</button><button data-f="Europeia">🇪🇺 Europeia</button><button data-f="Japonesa">🇯🇵 Japonesa</button><button data-f="BR">🇧🇷 BR</button><button data-f="Russa">🇷🇺 Russa</button><button data-f="Chinesa">🇨🇳 Chinesa</button>
+      </div>
+    </div>
+    <div id="stratlist"><p style="color:var(--mut)">Carregando…</p></div>
+  </section>
+
+  <!-- ================= GESTÃO ================= -->
+  <section id="t-money" class="tab">
+    <div class="grid2 eq">
+      <div class="card"><h3>💰 Calculadora de banca</h3>
+        <div class="frow">
+          <div><label class="fl">Banca (R$)</label><input type="number" id="m-bank" value="1000"></div>
+          <div><label class="fl">Acerto realista %</label><input type="number" id="m-win" value="58" min="40" max="70"></div>
+        </div>
+        <div class="frow">
+          <div><label class="fl">Payout %</label><input type="number" id="m-pay" value="82"></div>
+          <div><label class="fl">Stake %</label><input type="number" id="m-stk" value="1" step="0.25" min="0.25" max="10"></div>
+        </div>
+        <button class="btn2" id="m-sim" style="margin-top:12px">🎲 Simular 300 operações (Monte Carlo)</button>
+        <div id="m-out" style="margin-top:12px;font-size:13.5px"></div>
+      </div>
+      <div>
+        <div class="card"><h3>📏 Régua do break-even</h3>
+          <p style="font-size:13px;color:var(--mut);margin-bottom:8px">Acerto mínimo para NÃO perder dinheiro em cada payout. Payout baixo = armadilha matemática.</p>
+          <table><thead><tr><th>Payout</th><th class="num">Break-even</th><th class="num">58% vira</th></tr></thead><tbody id="m-be"></tbody></table>
+        </div>
+        <div class="card"><h3>🛡️ Regras de sobrevivência</h3>
+          <ol class="steps">
+            <li>Stake <b>1–2%</b> por entrada. Nunca 5%+, nunca "all-in para recuperar".</li>
+            <li><b>Stop WIN 4–6%</b> e <b>stop LOSS 3–5%</b> ao dia. Bateu? Desliga.</li>
+            <li><b>Sem martingale.</b> 5 gales seguidos (1→2→4→8→16) arriscam 31× para lucrar 0.8× — uma sequência de 6 losses (comum!) quebra a banca.</li>
+            <li><b>2 losses seguidos = pausa 30min.</b> 3 no dia = fim. Tilt é o maior inimigo.</li>
+            <li>Opere <b>DEMO 2 semanas</b> antes do real e registre TUDO no diário.</li>
+            <li>Payout &lt;75%? <b>Troque de ativo/horário</b> em vez de forçar entrada.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= DIÁRIO ================= -->
+  <section id="t-journal" class="tab">
+    <div class="grid2 eq">
+      <div class="card"><h3>📝 Registrar operação</h3>
+        <div class="frow">
+          <div><label class="fl">Ativo</label><input type="text" id="j-sym" placeholder="EURUSD-OTC"></div>
+          <div><label class="fl">Direção</label><select id="j-side"><option>CALL</option><option>PUT</option></select></div>
+        </div>
+        <div class="frow3">
+          <div><label class="fl">Expiração</label><select id="j-exp"><option>M1</option><option>M5</option></select></div>
+          <div><label class="fl">Stake R$</label><input type="number" id="j-stake" value="10"></div>
+          <div><label class="fl">Payout %</label><input type="number" id="j-pay" value="82"></div>
+        </div>
+        <div class="frow">
+          <div><label class="fl">Score do motor</label><input type="number" id="j-score" placeholder="+40"></div>
+          <div><label class="fl">Resultado</label><select id="j-res"><option value="win">✅ Win</option><option value="loss">❌ Loss</option><option value="tie">➖ Empate</option></select></div>
+        </div>
+        <button class="btn2" id="j-add" style="margin-top:12px">➕ Registrar</button>
+        <div style="margin-top:10px;display:flex;gap:8px"><button class="btn2" id="j-exp">⬇️ Backup</button><button class="btn2" id="j-imp">⬆️ Restaurar</button><input type="file" id="j-file" accept=".json" style="display:none"></div>
+      </div>
+      <div class="card"><h3>📊 Estatísticas reais</h3><div id="j-stats" style="font-size:14px"></div></div>
+    </div>
+    <div class="card"><h3>📜 Histórico</h3>
+      <table><thead><tr><th>Data</th><th>Ativo</th><th>Dir</th><th>Exp</th><th class="num">Stake</th><th class="num">P/L</th><th></th></tr></thead><tbody id="j-list"></tbody></table>
+    </div>
+  </section>
+
+  <div class="foot">BinaryMaster v1.0 · Ferramenta educacional — não é recomendação de investimento. Opções binárias envolvem risco elevado e são proibidas/reguladas em vários países. Verifique a legislação e os termos da sua corretora.<br><a href="/">FutAnalytics</a> · feito para operar com disciplina, não com esperança.</div>
+</main>
+<div id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);
+const toast=m=>{const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',2600)};
+
+// ---------- tabs
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));$(b.dataset.tab).classList.add('active');
+  if(b.dataset.tab==='t-strat')loadStrats();
+});
+
+// ---------- image: paste / drop / file (redimensiona p/ enviar leve)
+let imgB64=null;
+function setImage(dataUrl){
+  const img=new Image();
+  img.onload=()=>{
+    const max=1400;let w=img.width,h=img.height;const s=Math.min(1,max/Math.max(w,h));
+    w=Math.round(w*s);h=Math.round(h*s);
+    const c=document.createElement('canvas');c.width=w;c.height=h;
+    c.getContext('2d').drawImage(img,0,0,w,h);
+    imgB64=c.toDataURL('image/jpeg',0.88);
+    $('pimg').src=imgB64;$('preview').style.display='block';
+    $('vision-mini').textContent='✅ Print carregado ('+w+'×'+h+'). Clique em ANALISAR.';
+  };
+  img.src=dataUrl;
+}
+document.addEventListener('paste',e=>{
+  const f=[...(e.clipboardData?.files||[])].find(f=>f.type.startsWith('image/'));
+  if(f){const r=new FileReader();r.onload=()=>setImage(r.result);r.readAsDataURL(f);toast('📋 Print colado!');}
+});
+$('drop').onclick=()=>$('file').click();
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>setImage(r.result);r.readAsDataURL(f);};
+['dragover','dragenter'].forEach(ev=>$('drop').addEventListener(ev,e=>{e.preventDefault();$('drop').classList.add('over')}));
+['dragleave','drop'].forEach(ev=>$('drop').addEventListener(ev,e=>{e.preventDefault();$('drop').classList.remove('out');$('drop').classList.remove('over')}));
+$('drop').addEventListener('drop',e=>{const f=[...e.dataTransfer.files].find(f=>f.type.startsWith('image/'));if(f){const r=new FileReader();r.onload=()=>setImage(r.result);r.readAsDataURL(f);}});
+$('prm').onclick=e=>{e.stopPropagation();imgB64=null;$('preview').style.display='none';$('file').value='';$('vision-mini').textContent='';};
+
+// ---------- candle builder
+let seq=[];
+function drawSeq(){
+  $('seqview').innerHTML=seq.length?seq.map(c=>'<span class="'+c+'">'+(c==='G'?'🟩':c==='R'?'🟥':'⬜')+'</span>').join(' '):'<span style="color:var(--mut);letter-spacing:0;font-weight:400">vazio = usa a visão do print</span>';
+}
+document.querySelectorAll('.candles button[data-c]').forEach(b=>b.onclick=()=>{if(seq.length<20)seq.push(b.dataset.c);drawSeq();});
+$('seqback').onclick=()=>{seq.pop();drawSeq()};$('seqclear').onclick=()=>{seq=[];drawSeq()};
+
+// ---------- RSI toggle
+let useRSI=false;
+$('rsi').oninput=()=>{$('rsiv').textContent=$('rsi').value;$('rsilbl').textContent='~'+$('rsi').value;};
+$('rsion').onclick=()=>{useRSI=true;$('rsion').classList.add('on');$('rsioff').classList.remove('on');$('rsiv').textContent=$('rsi').value;};
+$('rsioff').onclick=()=>{useRSI=false;$('rsioff').classList.add('on');$('rsion').classList.remove('on');$('rsiv').textContent='—';$('rsilbl').textContent='não informado';};
+
+// ---------- analyze
+let lastRes=null;
+$('go').onclick=async()=>{
+  const btn=$('go');btn.disabled=true;btn.innerHTML='<span class="spin"></span> Analisando confluências…';
+  const payload={
+    image_base64:imgB64,symbol:$('symbol').value.trim(),expiry:$('expiry').value,
+    payout:parseFloat($('payout').value)||82,candles_seq:seq.join(' '),
+    trend:$('trend').value,price_pos:$('price_pos').value,candle_body:$('candle_body').value,
+    wick_top:$('wick_top').value,wick_bottom:$('wick_bottom').value,pattern:$('pattern').value,
+    rsi:useRSI?parseFloat($('rsi').value):null,stoch_zone:$('stoch_zone').value,stoch_cross:$('stoch_cross').value,
+    ema_stack:$('ema_stack').value,macd:$('macd').value,bollinger:$('bollinger').value,
+    volatility:$('volatility').value,volume:$('volume').value,sr:$('sr').value,smc:$('smc').value,
+    session:$('session').value,news:$('news').value,otc:/otc/i.test($('symbol').value),account:$('account').value
+  };
+  try{
+    const r=await fetch('/api/binary/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    lastRes=await r.json();renderRes(lastRes);
+    $('result').style.display='block';$('empty').style.display='none';
+    $('result').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){toast('❌ Falha na análise: '+e.message+' — tente de novo.');}
+  btn.disabled=false;btn.textContent='⚡ ANALISAR PRÓXIMA VELA';
+};
+function renderRes(d){
+  const dec=$('r-dec');dec.className='decision '+(d.side==='CALL'?'call':d.side==='PUT'?'put':'flat');
+  $('r-d1').textContent=d.decision;
+  $('r-d2').textContent=d.veto?'VETO DE RISCO — préserver capital é a jogada.':(d.boost_reasons[0]||'Ordem para a PRÓXIMA vela. Entre nos primeiros segundos.');
+  $('r-score').textContent=(d.score>0?'+':'')+d.score+' / 100';
+  const f=$('r-fill');
+  if(d.score>=0){f.style.left='50%';f.style.width=(d.score/2)+'%';f.style.background='linear-gradient(90deg,#1d5c40,var(--green))';}
+  else{f.style.left=(50+d.score/2)+'%';f.style.width=(-d.score/2)+'%';f.style.background='linear-gradient(90deg,var(--red),#6e262b)';}
+  $('r-exp').textContent=d.expiry;$('r-expwhy').textContent=d.expiry_why;
+  $('r-stars').textContent='★'.repeat(d.stars)+'☆'.repeat(5-d.stars);
+  $('r-conf').textContent=d.confluence_count+' confluências fortes';
+  $('r-win').textContent=d.win_est_pct.toFixed(1)+'%';
+  const ok=d.ev_ok;$('r-be').innerHTML='break-even '+d.breakeven_pct.toFixed(1)+'% · EV '+(d.ev_per_unit>0?'+':'')+(d.ev_per_unit*100).toFixed(1)+'% '+(ok?'✅':'❌');
+  $('r-win').style.color=ok?'var(--green)':'var(--red)';
+  $('r-stake').textContent=d.stake_pct>0?d.stake_pct.toFixed(2)+'%':'—';
+  $('r-veto').innerHTML=d.veto_reasons.map(v=>'<div style="background:var(--red-d);border:1px solid #6e262b;color:#ffb9bd;border-radius:10px;padding:9px 12px;font-size:13px;margin-bottom:8px">⛔ <b>VETO:</b> '+v+'</div>').join('')
+    +(d.boost_reasons.map(v=>'<div style="background:var(--green-d);border:1px solid #1d5c40;color:#9ff0c8;border-radius:10px;padding:9px 12px;font-size:13px;margin-bottom:8px">⭐ '+v+'</div>').join(''));
+  $('r-plan').innerHTML=d.entry_plan.map(s=>'<li>'+s+'</li>').join('');
+  $('r-pros').innerHTML=d.pros.length?d.pros.map(s=>'<li>'+s+'</li>').join(''):'<li>—</li>';
+  $('r-cons').innerHTML=d.cons.length?d.cons.map(s=>'<li>'+s+'</li>').join(''):'<li>—</li>';
+  $('r-mods').innerHTML=d.modules.map(m=>{
+    const v=m.vote,cf=m.confidence;const pct=Math.abs(v)*50;
+    const col=v>0.05?'var(--green)':v<-0.05?'var(--red)':'#5a6f92';
+    const lbl=v>0.5?'CALL':v<-0.5?'PUT':v>0.05?'leve CALL':v<-0.05?'leve PUT':'neutro';
+    const left=v>=0?'50%':(50-pct)+'%';
+    return '<div class="mod"><div class="mh"><span class="mn">'+m.name+'</span><span class="pill gray">'+m.school+'</span><span style="flex:1"></span><span class="pill '+(v>0.05?'green':v<-0.05?'red':'gray')+'">'+lbl+'</span><span style="font-size:12px;color:var(--mut)">peso '+m.weight+' · conf '+(cf*100).toFixed(0)+'%</span></div>'
+    +'<div class="bar"><i style="left:'+left+';width:'+pct+'%;background:'+col+'"></i></div>'
+    +'<ul>'+m.reasons.map(r=>'<li class="pro">✅ '+r+'</li>').join('')+m.warnings.map(w=>'<li class="con">⚠️ '+w+'</li>').join('')+'</ul></div>';
+  }).join('');
+  $('r-chk').innerHTML=d.checklist.map(c=>'<div class="it"><span>'+(c.ok?'✅':'⬜')+'</span><span>'+c.text+'</span></div>').join('');
+  const v=d.vision;
+  $('r-vis').innerHTML=!v?'<p>Só análise manual (sem print).</p>':!v.ok?'<p>⚠️ '+v.error+'</p>':
+    '<p>🕯️ Sequência: <b style="color:var(--txt)">'+v.seq+'</b> · '+v.pct_green.toFixed(0)+'% verdes · streak '+v.streak_len+' '+v.streak_dir+'</p>'
+    +'<p>📈 Tendência da visão: <b>'+v.trend+'</b> (slope '+v.slope+') · volatilidade '+v.volatility_label+' · '+v.range_label+'</p>'
+    +'<p>🎯 Qualidade da detecção: <b>'+(v.quality*100).toFixed(0)+'%</b>'+(v.notes.length?' · '+v.notes.join(' · '):'')+'</p>';
+}
+$('copyres').onclick=()=>{
+  if(!lastRes)return;const d=lastRes;
+  const t='BinaryMaster: '+d.decision+' | '+d.expiry+' | score '+d.score+' | acerto est '+d.win_est_pct+'% vs BE '+d.breakeven_pct+'% | stake '+d.stake_pct+'% | '+($('symbol').value||'');
+  navigator.clipboard.writeText(t).then(()=>toast('📋 Resumo copiado!'));
+};
+$('tojournal').onclick=()=>{
+  if(!lastRes)return;const d=lastRes;
+  if(d.side==='FLAT'){toast('Sem entrada — nada a registrar. ✅');return;}
+  $('j-sym').value=$('symbol').value;$('j-side').value=d.side;$('j-exp').value=d.expiry==='—'?'M1':d.expiry;
+  $('j-pay').value=$('payout').value;$('j-score').value=d.score;
+  document.querySelector('[data-tab="t-journal"]').click();toast('Pronto — confira stake e resultado, depois Registre.');
+};
+
+// ---------- strategies
+let strats=[],schoolF='';
+async function loadStrats(){
+  if(strats.length){drawStrats();return;}
+  try{const r=await fetch('/api/binary/strategies');const j=await r.json();strats=j.strategies;drawStrats();}
+  catch(e){$('stratlist').innerHTML='<p>Erro ao carregar.</p>';}
+}
+function drawStrats(){
+  const list=strats.filter(s=>!schoolF||s.school.includes(schoolF));
+  $('stratlist').innerHTML=list.map(s=>'<div class="strat"><div class="sh"><span class="sn">'+s.name+'</span><span class="pill violet">'+s.school+'</span><span class="pill blue">'+s.timeframes+'</span><span class="pill green">'+s.win_hint+'</span></div>'
+  +'<dl><div><dt>Setup</dt><dd>'+s.setup+'</dd></div><div><dt>Entrada</dt><dd>'+s.entry+'</dd></div><div><dt>Filtro (quando NÃO operar)</dt><dd>'+s.filter+'</dd></div><div><dt>Por que funciona</dt><dd>'+s.why+'</dd></div></dl></div>').join('');
+}
+document.querySelectorAll('#schoolfilter button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#schoolfilter button').forEach(x=>x.classList.remove('on'));b.classList.add('on');schoolF=b.dataset.f;drawStrats();
+});
+
+// ---------- money
+(function(){
+  const tb=$('m-be');let html='';
+  [95,90,85,82,80,75,70,65].forEach(p=>{const be=100/(1+p/100);const ev=(0.58*p/100-0.42)*100;
+    html+='<tr><td>'+p+'%</td><td class="num">'+be.toFixed(1)+'%</td><td class="num" style="color:'+(ev>0?'var(--green)':'var(--red)')+'">'+(ev>0?'+':'')+ev.toFixed(1)+'%</td></tr>';});
+  tb.innerHTML=html;
+})();
+$('m-sim').onclick=()=>{
+  const bank=parseFloat($('m-bank').value)||1000,w=(parseFloat($('m-win').value)||58)/100,
+        pay=(parseFloat($('m-pay').value)||82)/100,st=(parseFloat($('m-stk').value)||1)/100;
+  const be=1/(1+pay),ev=w*pay-(1-w);
+  let paths=[],ruin=0;
+  for(let s=0;s<400;s++){let b=bank;for(let i=0;i<300;i++){const stake=b*st;b+=Math.random()<w?stake*pay:-stake;if(b<=bank*0.2)break;}paths.push(b);if(b<=bank*0.2)ruin++;}
+  paths.sort((a,b)=>a-b);
+  const med=paths[200],p10=paths[40],p90=paths[360];
+  $('m-out').innerHTML='<div class="kpis"><div class="kpi"><div class="l">EV/operação</div><div class="v" style="color:'+(ev>0?'var(--green)':'var(--red)')+'">'+(ev*100).toFixed(2)+'%</div><div class="s">break-even '+(be*100).toFixed(1)+'%</div></div>'
+  +'<div class="kpi"><div class="l">Mediana 300 ops</div><div class="v">R$ '+med.toFixed(0)+'</div><div class="s">de R$ '+bank.toFixed(0)+'</div></div>'
+  +'<div class="kpi"><div class="l">Pior 10%</div><div class="v" style="color:var(--red)">R$ '+p10.toFixed(0)+'</div><div class="s">ruína: '+(ruin/4).toFixed(1)+'%</div></div>'
+  +'<div class="kpi"><div class="l">Melhor 10%</div><div class="v" style="color:var(--green)">R$ '+p90.toFixed(0)+'</div><div class="s">sorte existe — e passa</div></div></div>'
+  +'<p style="color:var(--mut);font-size:12.5px">Simulação honesta: mesmo com edge (EV+), há cenários de perda em 300 operações. Com EV−, a ruína é questão de tempo. É por isso que payout e filtro decidem tudo.</p>';
+};
+
+// ---------- journal (localStorage)
+const JKEY='binarymaster_journal_v1';
+const jload=()=>{try{return JSON.parse(localStorage.getItem(JKEY))||[]}catch(e){return[]}};
+const jsave=j=>localStorage.setItem(JKEY,JSON.stringify(j));
+function jrender(){
+  const j=jload();
+  $('j-list').innerHTML=j.slice().reverse().map((t,i)=>{
+    const pl=t.res==='win'?t.stake*t.pay/100:t.res==='loss'?-t.stake:0;
+    return '<tr><td style="font-size:12px">'+t.dt+'</td><td>'+t.sym+'</td><td>'+t.side+'</td><td>'+t.exp+'</td><td class="num">'+t.stake.toFixed(2)+'</td><td class="num" style="color:'+(pl>=0?'var(--green)':'var(--red)')+'">'+(pl>=0?'+':'')+pl.toFixed(2)+'</td><td><button class="btn2" data-del="'+(j.length-1-i)+'" style="padding:4px 9px">✕</button></td></tr>';
+  }).join('')||'<tr><td colspan="7" style="color:var(--mut)">Nenhuma operação. Opere no DEMO e registre tudo.</td></tr>';
+  document.querySelectorAll('[data-del]').forEach(b=>b.onclick=()=>{const jj=jload();jj.splice(+b.dataset.del,1);jsave(jj);jrender();});
+  const st=j.filter(t=>t.res!=='tie');
+  const w=st.filter(t=>t.res==='win').length;
+  const pl=j.reduce((a,t)=>a+(t.res==='win'?t.stake*t.pay/100:t.res==='loss'?-t.stake:0),0);
+  const wr=st.length?(100*w/st.length):0;
+  $('j-stats').innerHTML='<div class="kpis"><div class="kpi"><div class="l">Operações</div><div class="v">'+st.length+'</div></div>'
+  +'<div class="kpi"><div class="l">Winrate real</div><div class="v" style="color:'+(wr>=55?'var(--green)':'var(--amber)')+'">'+wr.toFixed(1)+'%</div><div class="s">meta: acima do break-even</div></div>'
+  +'<div class="kpi"><div class="l">P/L total</div><div class="v" style="color:'+(pl>=0?'var(--green)':'var(--red)')+'">R$ '+pl.toFixed(2)+'</div></div></div>'
+  +'<p style="color:var(--mut);font-size:12.5px">Regra: menos de 100 operações = sem conclusão. Avalie winrate por SCORE do motor: se setups 4–5★ não batem 57%+, revise os filtros antes de culpar a ferramenta.</p>';
+}
+$('j-add').onclick=()=>{
+  const j=jload();
+  j.push({dt:new Date().toLocaleString('pt-BR'),sym:$('j-sym').value||'—',side:$('j-side').value,exp:$('j-exp').value,
+    stake:parseFloat($('j-stake').value)||0,pay:parseFloat($('j-pay').value)||82,score:$('j-score').value,res:$('j-res').value});
+  jsave(j);jrender();toast('✅ Operação registrada!');
+};
+$('j-exp').onclick=()=>{const b=new Blob([localStorage.getItem(JKEY)||'[]'],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='binarymaster-diario.json';a.click();};
+$('j-imp').onclick=()=>$('j-file').click();
+$('j-file').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const j=JSON.parse(r.result);if(Array.isArray(j)){jsave(j);jrender();toast('✅ Diário restaurado!');}else toast('Arquivo inválido.');}catch(_){toast('Arquivo inválido.');}};r.readAsText(f);};
+jrender();
+</script>
+</body>
+</html>

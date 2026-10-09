@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import calibration, db, joint, odds_fd, provider, understat
+from .binary_api import router as binary_router
 from .model import (
     MARKET_LABELS, TeamSample, analyze_match, blend_markets, build_multiple,
     candidate_markets, de_vig_markets, flat_stake, kelly_stake, league_priors,
@@ -40,6 +41,7 @@ from .model import (
 )
 
 app = FastAPI(title="FutAnalytics")
+app.include_router(binary_router)
 db.init()
 
 VERSION = "2.3.5"
@@ -729,6 +731,11 @@ def labels():
 
 # ------------------------------------------------------------------ frontend
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+
+@app.api_route("/binary", methods=["GET", "HEAD"])
+def binary_page():
+    return FileResponse(str(STATIC / "binary.html"), headers={"Cache-Control": "no-cache"})
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
