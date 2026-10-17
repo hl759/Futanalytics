@@ -102,6 +102,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
 
 <div class="row" style="margin:14px 0 4px">
   <button class="pri" onclick="tab('radar')">radar de volatilidade</button>
+  <button class="pri" onclick="tab('binance')" style="border-color:#d29922;color:#f5d68a;background:#2b2410">★ mesa binance</button>
   <button onclick="tab('surface')">superfície</button>
   <button onclick="tab('journal')">diário de trades</button>
   <button onclick="tab('prov')">provedores</button>
@@ -109,8 +110,44 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);
   <button onclick="tab('metodo')">metodologia</button>
 </div>
 
+<!-- ============================================================ MESA BINANCE -->
+<section id="t-binance" style="display:none">
+  <h2>Mesa Binance — Direcionamento Imediato &amp; Arquitetura Híbrida</h2>
+  <div id="bn-action-now" style="margin-bottom:14px"></div>
+  <div id="bn-thesis" class="note" style="margin-bottom:12px">carregando tese e dados <span class="spin"></span></div>
+
+  <div class="card" style="margin-bottom:14px;border-color:#2d5a8a">
+    <h3>Auditor de Oferta da Binance (Dual Investment &amp; Opções vs. Superfície Justa)
+      <span class="pill p-acc">Black-Scholes + Reversão OU</span></h3>
+    <p class="mut" style="margin:0 0 10px">
+      A Binance mostra apenas uma <b>APR (%)</b> no Dual Investment e esconde a volatilidade implícita real.
+      Digite abaixo os dados da tela da Binance para descobrir a <b>IV embutida</b>, o <b>desconto vs. Deribit</b>,
+      o <b>VRP real contra a RV prevista</b> e se a operação passa no <b>Checklist de 11 Itens</b>.
+    </p>
+    <div class="grid g4">
+      <div class="fld"><label>Moeda</label><select id="ba-ccy"><option>BTC</option><option>ETH</option></select></div>
+      <div class="fld"><label>Produto na Binance</label>
+        <select id="ba-prod">
+          <option value="buy_low_put">Dual Investment: Buy Low (Short Put em USDT)</option>
+          <option value="sell_high_call">Dual Investment: Sell High (Covered Call)</option>
+        </select>
+      </div>
+      <div class="fld"><label>Strike (vazio = ~5% OTM)</label><input id="ba-strike" type="number" step="50" placeholder="ex: 80000"></div>
+      <div class="fld"><label>Prazo (DTE em dias)</label><input id="ba-dte" type="number" step="1" value="14"></div>
+      <div class="fld"><label>APR Oferecida pela Binance (%)</label><input id="ba-apr" type="number" step="0.5" value="28"></div>
+      <div class="fld" style="justify-content:flex-end">
+        <button class="pri" onclick="auditBinanceOffer()">Auditar Oferta na Hora</button>
+      </div>
+    </div>
+    <div id="ba-out" style="margin-top:12px"></div>
+  </div>
+
+  <div id="bn-desks" class="grid g2"><div class="mut">calculando estruturas <span class="spin"></span></div></div>
+</section>
+
 <!-- ============================================================ RADAR -->
 <section id="t-radar">
+  <div id="radar-action-now" style="margin-bottom:16px"></div>
   <h2>Leitura de volatilidade — IV de mercado × RV do modelo</h2>
   <div id="radar" class="grid g2"><div class="mut">carregando <span class="spin"></span></div></div>
   <div id="radar-note" style="margin-top:12px"></div>
@@ -312,9 +349,10 @@ const $=id=>document.getElementById(id);
 let S=null, LAST=null;
 
 function tab(name){
-  ['radar','surface','journal','prov','cfg','metodo'].forEach(t=>{
+  ['radar','binance','surface','journal','prov','cfg','metodo'].forEach(t=>{
     $('t-'+t).style.display = (t===name)?'':'none';
   });
+  if(name==='binance'){loadBinanceDesk();}
   if(name==='journal'){loadTrades();}
   if(name==='cfg'&&S){fillCfg();}
 }
@@ -332,8 +370,13 @@ function fmt(x,d=2){return (x===null||x===undefined||isNaN(x))?'—':Number(x).t
 async function load(force){
   $('radar').innerHTML='<div class="mut">lendo superfície de volatilidade <span class="spin"></span></div>';
   try{
-    const r=await fetch('/api/radar'); const j=await r.json();
+    const [r, rb] = await Promise.all([fetch('/api/radar'), fetch('/api/binance-desk')]);
+    const j = await r.json();
+    const jb = await rb.json();
     LAST=j; render(j);
+    if(jb && jb.action_now){
+      $('radar-action-now').innerHTML = renderActionNowBox(jb.action_now, true);
+    }
   }catch(e){
     $('radar').innerHTML=`<div class="bad">falha ao carregar: ${e}</div>`;
   }
@@ -555,9 +598,364 @@ function fillCfg(){
   $('cfg-gap').textContent=S.stress_gap_sigma;
   const sel=$('n-struct'); sel.innerHTML='';
   (S.defined_risk_only?['iron_condor','put_spread','call_spread','calendar_spread',
-    'diagonal_spread','butterfly']:['iron_condor','put_spread','call_spread','calendar_spread',
-    'diagonal_spread','butterfly','short_strangle','short_straddle','short_put','short_call'])
+    'diagonal_spread','butterfly','cash_and_carry_perp','cash_and_carry_quarterly',
+    'dual_buy_low_put','dual_sell_high_call','binance_opt_straddle','perp_vol_target']:[
+    'iron_condor','put_spread','call_spread','calendar_spread',
+    'diagonal_spread','butterfly','cash_and_carry_perp','cash_and_carry_quarterly',
+    'dual_buy_low_put','dual_sell_high_call','binance_opt_straddle','perp_vol_target',
+    'short_strangle','short_straddle','short_put','short_call'])
     .forEach(x=>{const o=document.createElement('option');o.value=x;o.textContent=x;sel.appendChild(o);});
+}
+
+function gradePill(g,score){
+  const cls = g==='A'?'p-ok':(g==='B'?'p-warn':'p-bad');
+  return pill(cls, `Selo ${g} · ${fmt(score,1)}/10`);
+}
+
+function prefillTrade(ccy, structure, direction, iv, prem, notional, stress, grade){
+  tab('journal');
+  $('n-ccy').value = ccy;
+  if($('n-struct')) $('n-struct').value = structure;
+  $('n-dir').value = direction;
+  $('n-iv').value = iv!==null&&iv!==undefined ? Number(iv).toFixed(2) : '';
+  $('n-prem').value = prem!==null&&prem!==undefined ? Number(prem).toFixed(2) : '';
+  $('n-not').value = notional!==null&&notional!==undefined ? Number(notional).toFixed(2) : '';
+  $('n-stress').value = stress!==null&&stress!==undefined ? Number(stress).toFixed(2) : '';
+  $('n-grade').value = grade || 'B';
+}
+
+async function quickSetBankroll(inputId){
+  const el = $(inputId);
+  const val = el ? Number(el.value) : 0;
+  if(!val || val < 1){ alert('Digite um valor de banca maior que US$ 1'); return; }
+  await fetch('/api/settings', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({bankroll: val})
+  });
+  await loadCfg();
+  await load(true);
+  if($('t-binance').style.display !== 'none'){ await loadBinanceDesk(); }
+}
+
+function renderBeginnerSection(bg, prefix){
+  if(!bg || !bg.ok) return '';
+  const lcls = bg.traffic_light==='green'?'p-ok':(bg.traffic_light==='red'?'p-bad':'p-warn');
+  const tracks = bg.tracks || [];
+  const rules = bg.golden_rules || [];
+  const gloss = bg.glossary || [];
+  return `
+  <div class="card" style="margin-bottom:14px;background:#0c1713;border:1.5px solid #245c36">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <span class="pill ${lcls}" style="font-size:12px">${bg.traffic_light_label}</span>
+      <div class="row" style="gap:6px">
+        <span class="mut">Meu capital para começar (US$):</span>
+        <input id="${prefix}-bk" type="number" step="10" value="${bg.bankroll_usd}" style="width:110px;padding:4px 8px">
+        <button class="pri" onclick="quickSetBankroll('${prefix}-bk')">Recalcular Meu Plano</button>
+      </div>
+    </div>
+    <div style="font-size:13.5px;color:#d6f5e0;margin-bottom:12px">
+      <b>🌱 Tradução Simples para Iniciante:</b> ${bg.plain_summary}
+    </div>
+
+    <div class="grid g3">
+      ${tracks.map(t=>`<div class="card" style="background:#0d141c;border-color:#22384d">
+        <div style="margin-bottom:6px"><span class="pill p-acc">${t.badge}</span></div>
+        <div style="font-weight:700;font-size:13.5px;margin-bottom:4px;color:#e6edf3">${t.title}</div>
+        <div class="mut" style="margin-bottom:4px"><b>Para quem é:</b> ${t.who_for}</div>
+        <div class="mut" style="margin-bottom:10px;color:#8fc4ff"><b>Risco:</b> ${t.risk_level}</div>
+        ${(t.steps||[]).map(s=>`<div style="border-top:1px solid #1b2836;padding-top:8px;margin-top:8px;font-size:12.5px">
+          <div style="font-weight:700;color:#f5d68a;margin-bottom:3px">Passo ${s.step}: ${s.title}</div>
+          <div style="background:#091017;padding:6px 8px;border-radius:6px;margin-bottom:4px;color:#bcd8f2">
+            <b>📱 Onde clicar na Binance:</b> ${s.where_to_click}
+          </div>
+          <div style="color:#c9d6e2"><b>💰 Como você lucra:</b> ${s.what_happens}</div>
+        </div>`).join('')}
+      </div>`).join('')}
+    </div>
+
+    <div class="grid g2" style="margin-top:12px">
+      <div class="card" style="background:#0d141c">
+        <h3>🛡️ As 4 Regras de Ouro do Iniciante</h3>
+        <div style="font-size:12.5px;color:#d0e3f5">
+          ${rules.map(r=>`<div style="margin-bottom:5px">${r}</div>`).join('')}
+        </div>
+      </div>
+      <div class="card" style="background:#0d141c">
+        <h3>📖 Dicionário Sem Jargão (O que significa cada botão)</h3>
+        ${gloss.map(g=>`<div class="kv"><span class="k"><b>${g.term}</b></span><span class="v" style="font-family:inherit;text-align:right">${g.meaning}</span></div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderActionNowBox(act, showJumpBtn){
+  if(!act || !act.ok) return '';
+  const orders = act.orders_now || [];
+  const avoids = act.avoid_now || [];
+  const pfx = showJumpBtn ? 'rad' : 'bn';
+  return `
+  <div class="card" style="border:1.5px solid #d29922;background:linear-gradient(180deg,#191d24 0%,#121922 100%)">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px">
+      <div class="row" style="gap:8px">
+        <span class="pill p-warn" style="font-size:11.5px">★ BÚSSOLA DE DECISÃO AGORA</span>
+        <span class="pill p-ok">ATIVO LÍDER: ${act.winner_coin}</span>
+        <span class="pill p-acc">BANCA: US$ ${fmt(act.bankroll_usd,2)}</span>
+      </div>
+      ${showJumpBtn?`<button class="pri" onclick="tab('binance')">Abrir Mesa Binance Completa →</button>`:''}
+    </div>
+    <div style="font-size:16px;font-weight:700;color:#f5d68a;margin-bottom:4px">${act.headline}</div>
+    <div style="font-size:13px;color:#d0e3f5;margin-bottom:6px"><b>Por que ${act.winner_coin} vence agora:</b> ${act.why_winner}</div>
+    <div class="note" style="margin-bottom:12px"><b>Postura Tática do Momento:</b> ${act.market_stance}</div>
+
+    ${renderBeginnerSection(act.beginner_guide, pfx)}
+
+    <details style="margin-top:8px">
+      <summary style="font-weight:600;color:#8fc4ff">📊 Ver Plano de Execução Quantitativo Completo (4 Ordens + Checklist A/B/C)</summary>
+      <div class="grid g2" style="margin-top:10px">
+      ${orders.map(o=>{
+        const ccy = (o.asset||'BTC').replace('USDT','').replace(' / FDUSD','');
+        const canLog = ccy==='BTC' || ccy==='ETH';
+        return `<div class="card" style="background:#0d141c;border-color:#263646">
+          <div class="row" style="justify-content:space-between;margin-bottom:6px">
+            <span style="font-weight:700;color:#8fc4ff;font-size:12px">${o.priority}</span>
+            <span class="row" style="gap:4px">
+              ${pill('p-acc', o.pct_bankroll+'% · US$ '+fmt(o.amount_usd,2))}
+              ${gradePill(o.grade||'A', o.score||8.0)}
+            </span>
+          </div>
+          <div class="kv"><span class="k">Onde na Binance</span><span class="v">${o.where_in_binance}</span></div>
+          <div style="margin:6px 0;font-size:13px;color:#e6edf3"><b>O que fazer:</b> ${o.what_to_do_now}</div>
+          <div class="kv"><span class="k">Níveis / Parâmetros</span><span class="v">${o.levels}</span></div>
+          <div class="kv"><span class="k">Resultado Esperado</span><span class="v" style="color:var(--ok)">${o.expected_outcome}</span></div>
+          ${canLog?`<div class="row" style="margin-top:8px">
+            <button onclick="prefillTrade('${ccy}','${o.strategy_id}','${o.direction}',${o.entry_iv||35},${o.expected_yield_num||0},${o.amount_usd},${o.stress_loss_usd||0},'${o.grade||'B'}')">
+              + Registrar Passo #${o.step} no Diário
+            </button>
+          </div>`:''}
+        </div>`;
+      }).join('')}
+      </div>
+    </details>
+
+    ${avoids.length?`<div class="bad" style="margin-top:12px">
+      <b>O QUE NÃO FAZER NESTE MOMENTO (Travas de Proteção de Capital):</b>
+      <ul style="margin:6px 0 0 18px;padding:0">
+        ${avoids.map(a=>`<li style="margin-bottom:3px">${a}</li>`).join('')}
+      </ul>
+    </div>`:''}
+  </div>`;
+}
+
+async function loadBinanceDesk(){
+  $('bn-desks').innerHTML='<div class="mut">calculando estratégias da Mesa Binance <span class="spin"></span></div>';
+  try{
+    const j = await (await fetch('/api/binance-desk')).json();
+    if(j.action_now){
+      $('bn-action-now').innerHTML = renderActionNowBox(j.action_now, false);
+    }
+    const th = j.investor_thesis || {};
+    $('bn-thesis').innerHTML = `<b>Veredito do Investidor Quantitativo:</b> ${th.winner || ''}<br>
+      <span class="mut" style="color:#d0e3f5">${th.why || ''}</span>
+      <div class="grid g3" style="margin-top:10px">
+        ${(th.pillars||[]).map(p=>`<div class="card" style="padding:10px;background:#0d1620">
+          <div class="lbl">Pilar ${p.pillar} · ${p.weight} da Banca</div>
+          <div style="font-weight:600;margin:3px 0">${p.name}</div>
+          <div class="mut">${p.edge}</div>
+        </div>`).join('')}
+      </div>`;
+    const el = $('bn-desks'); el.innerHTML = '';
+    (j.desks||[]).forEach(d => el.appendChild(renderBinanceCoinCard(d)));
+  }catch(e){
+    $('bn-desks').innerHTML=`<div class="bad">erro ao carregar Mesa Binance: ${e}</div>`;
+  }
+}
+
+function renderChecklistDetails(chk){
+  if(!chk || !chk.items) return '';
+  return `<details style="margin-top:8px">
+    <summary>Checklist de 11 Itens: ${gradePill(chk.grade, chk.score)}
+      (${chk.ok_count} ok · ${chk.warn_count} warn · ${chk.bad_count} bad)</summary>
+    <div style="margin-top:8px">
+      ${chk.hard_block?`<div class="bad" style="margin-bottom:8px"><b>TRAVA DE SOBREVIVÊNCIA:</b> ${chk.hard_block}</div>`:''}
+      ${chk.items.map(i=>`<div class="kv">
+        <span class="k">#${i.n} ${i.item}</span>
+        <span class="v">${pill(i.status==='ok'?'p-ok':(i.status==='warn'?'p-warn':'p-bad'), i.status.toUpperCase())} ${i.detail}</span>
+      </div>`).join('')}
+    </div>
+  </details>`;
+}
+
+function renderBinanceCoinCard(d){
+  const el = document.createElement('div'); el.className = 'card';
+  const b = d.best_today || {};
+  const carry = (d.strategies||{}).carry || {};
+  const dual = (d.strategies||{}).dual_investment || {};
+  const lopt = (d.strategies||{}).long_options || {};
+  const vt = (d.strategies||{}).vol_target || {};
+  const bl = dual.buy_low_short_put || {};
+  const sh = dual.sell_high_covered_call || {};
+
+  el.innerHTML = `
+    <h3>Mesa Binance · ${d.ccy}USDT
+      <span class="row" style="gap:6px">
+        ${gradePill(b.grade||'B', b.score||0)}
+        ${d.is_demo?pill('p-bad','DEMO'):pill('p-ok','REAL')}
+      </span>
+    </h3>
+    <div class="grid g4" style="gap:8px;margin-bottom:10px">
+      <div><div class="lbl">Spot</div><div class="big">${fmt(d.spot,0)}</div></div>
+      <div><div class="lbl">IV 30d</div><div class="big">${fmt(d.iv_30d)}%</div></div>
+      <div><div class="lbl">RV Prevista</div><div class="big">${fmt(d.rv_forecast)}%</div></div>
+      <div><div class="lbl">VRP</div><div class="big" style="color:${d.vrp_pts>=0?'var(--ok)':'var(--bad)'}">${fmt(d.vrp_pts)} pts</div></div>
+    </div>
+
+    <div class="note" style="margin-bottom:12px">
+      <b>Regime Atual:</b> ${d.regime_summary}<br>
+      <b>Melhor Operação Hoje:</b> <code>${b.title}</code> (${b.binance_market}) ·
+      Notional sugerido: <b>US$ ${fmt(b.recommended_notional_usd)}</b> (Estresse máx: US$ ${fmt(b.max_loss_stress_usd)})
+    </div>
+
+    ${d.trend?`<div class="card" style="margin-bottom:12px;background:#0e1722;border-color:#26415c">
+      <h3>Direcionamento de Preço, Tendência &amp; Níveis Táticos (${d.ccy})
+        <span class="pill ${d.trend.score>=1?'p-ok':(d.trend.score<=-1.5?'p-bad':'p-warn')}">${d.trend.bias} · Convicção ${fmt(d.trend.confidence_pct,0)}%</span>
+      </h3>
+      <div style="font-size:12.5px;color:#cfe6ff;margin-bottom:8px"><b>Chamada Tática Agora:</b> ${d.trend.tactical_summary}</div>
+      <div class="kv"><span class="k">Médias Móveis (EMA 9 / 21 / 50 / 200)</span>
+        <span class="v">${fmt(d.trend.ema_9,0)} / ${fmt(d.trend.ema_21,0)} / ${fmt(d.trend.ema_50,0)} / ${fmt(d.trend.ema_200,0)}</span></div>
+      <div class="kv"><span class="k">Momentum (7d / 14d / 30d · Z-Vol)</span>
+        <span class="v">${fmt(d.trend.roc_7d_pct)}% / ${fmt(d.trend.roc_14d_pct)}% / ${fmt(d.trend.roc_30d_pct)}% (z=${fmt(d.trend.vol_adjusted_momentum_z,2)}σ)</span></div>
+      <div class="kv"><span class="k">RSI (14d) · Posição no Canal 20d</span>
+        <span class="v">${fmt(d.trend.rsi_14,1)} · ${fmt(d.trend.channel_position_pct,0)}% (${fmt(d.trend.channel_20d_low,0)}–${fmt(d.trend.channel_20d_high,0)})</span></div>
+      <div class="kv"><span class="k">Suportes (1σ dia / 2σ sem) · Resistências (1σ dia / 2σ sem)</span>
+        <span class="v">Sup ${fmt(d.trend.support_1sigma,0)} / ${fmt(d.trend.support_2sigma_week,0)} · Res ${fmt(d.trend.resistance_1sigma,0)} / ${fmt(d.trend.resistance_2sigma_week,0)}</span></div>
+      <div style="margin-top:6px;font-size:11.5px;color:var(--mut)">
+        ${(d.trend.reasons||[]).map(r=>`• ${r}`).join('<br>')}
+      </div>
+    </div>`:''}
+
+    <h3>Alocação Recomendada da Banca na Binance (${d.ccy})</h3>
+    <table>
+      <tr><th>Pilar / Veículo na Binance</th><th class="t">% Banca</th><th class="t">Alocação (US$)</th><th>Status</th></tr>
+      ${(d.capital_allocation||[]).map(a=>`<tr>
+        <td>${a.bucket}</td>
+        <td class="t">${a.pct}%</td>
+        <td class="t">${fmt(a.usd)}</td>
+        <td>${a.status.includes('BLOQUEADO')?pill('p-bad',a.status):(a.status.includes('ATIVO')?pill('p-ok',a.status):pill('p-warn',a.status))}</td>
+      </tr>`).join('')}
+    </table>
+
+    <!-- PILAR 1: CASH AND CARRY -->
+    <div class="card" style="margin-top:12px;background:#0e151d">
+      <h3>1. ${carry.title} ${gradePill((carry.checklist||{}).grade, (carry.checklist||{}).score)}</h3>
+      <div class="kv"><span class="k">Mercado Binance</span><span class="v">${carry.binance_market}</span></div>
+      <div class="kv"><span class="k">Instrumento Preferido</span><span class="v">${carry.preferred_instrument}</span></div>
+      <div class="kv"><span class="k">Funding 8h / Anualizado</span><span class="v">${fmt(carry.funding_8h_pct,4)}% / +${fmt(carry.funding_ann_pct)}% a.a.</span></div>
+      <div class="kv"><span class="k">Basis 30d Anualizado (Forward ${fmt(carry.forward_30d,0)})</span><span class="v">+${fmt(carry.basis_30d_ann_pct)}% a.a.</span></div>
+      <div class="kv"><span class="k">Custo Ida+Volta Binance (Spot BNB + Perp Maker)</span><span class="v">${fmt(carry.binance_roundtrip_fee_pct,2)}% (Break-even: ${fmt(carry.breakeven_days,1)} dias)</span></div>
+      <div class="kv"><span class="k">Retorno Líquido Estimado (ciclo 30d)</span><span class="v" style="color:var(--ok)">+${fmt(carry.net_apr_30d_pct)}% a.a. (Delta = 0)</span></div>
+      <div class="kv"><span class="k">Dimensionamento por Estresse</span>
+        <span class="v">US$ ${fmt((carry.sizing||{}).recommended_notional_usd)} (Estresse: US$ ${fmt((carry.sizing||{}).max_loss_stress_usd)})</span></div>
+      <div style="margin-top:8px;font-size:12px;color:var(--mut)">
+        ${(carry.execution_steps||[]).map(s=>`<div>${s}</div>`).join('')}
+      </div>
+      ${renderChecklistDetails(carry.checklist)}
+      <div class="row" style="margin-top:8px">
+        <button onclick="prefillTrade('${d.ccy}','cash_and_carry_perp','neutral_carry',${d.iv_30d},${carry.net_apr_30d_pct},${(carry.sizing||{}).recommended_notional_usd},${(carry.sizing||{}).max_loss_stress_usd},'${(carry.checklist||{}).grade}')">
+          + Enviar Carry p/ Diário
+        </button>
+      </div>
+    </div>
+
+    <!-- PILAR 2A: DUAL INVESTMENT -->
+    <div class="card" style="margin-top:12px;background:#0e151d">
+      <h3>2A. ${dual.title} ${gradePill((dual.checklist||{}).grade, (dual.checklist||{}).score)}</h3>
+      <div class="mut" style="margin-bottom:8px">${dual.why_not_raw_options||''}</div>
+      <div class="kv"><span class="k">Buy Low (Short Put ${fmt(bl.strike,0)} · ${fmt(bl.distance_otm_pct,1)}% OTM · ${bl.dte_days}d)</span>
+        <span class="v">Exigir APR ≥ <b>${fmt(bl.min_acceptable_apr_pct)}%</b> (Justa: ${fmt(bl.fair_market_apr_pct)}%)</span></div>
+      <div class="kv"><span class="k">Sell High (Covered Call ${fmt(sh.strike,0)} · ${fmt(sh.distance_otm_pct,1)}% OTM · ${sh.dte_days}d)</span>
+        <span class="v">Exigir APR ≥ <b>${fmt(sh.min_acceptable_apr_pct)}%</b> (Justa: ${fmt(sh.fair_market_apr_pct)}%)</span></div>
+      <div class="kv"><span class="k">Dimensionamento por Estresse</span>
+        <span class="v">US$ ${fmt((dual.sizing||{}).recommended_notional_usd)} (Estresse: US$ ${fmt((dual.sizing||{}).max_loss_stress_usd)})</span></div>
+      ${renderChecklistDetails(dual.checklist)}
+      <div class="row" style="margin-top:8px">
+        <button onclick="prefillTrade('${d.ccy}','dual_buy_low_put','short_vol',${d.iv_30d},${bl.fair_market_apr_pct},${(dual.sizing||{}).recommended_notional_usd},${(dual.sizing||{}).max_loss_stress_usd},'${(dual.checklist||{}).grade}')">
+          + Enviar Dual Investment p/ Diário
+        </button>
+      </div>
+    </div>
+
+    <!-- PILAR 2B: BINANCE OPTIONS CONVEXIDADE -->
+    <div class="card" style="margin-top:12px;background:#0e151d">
+      <h3>2B. ${lopt.title} ${gradePill((lopt.checklist||{}).grade, (lopt.checklist||{}).score)}</h3>
+      <div class="kv"><span class="k">Custo do Straddle ATM (${lopt.dte_days}d)</span>
+        <span class="v">US$ ${fmt(lopt.straddle_cost_usd_per_coin)} / ${d.ccy} (Break-even: ±${fmt(lopt.breakeven_move_pct)}%)</span></div>
+      <div class="kv"><span class="k">Move Esperado pelo Modelo (RV Prevista)</span>
+        <span class="v">±${fmt(lopt.model_expected_1sigma_move_pct)}% (Diferença: ${fmt(lopt.edge_move_diff_pct)}%)</span></div>
+      <div class="kv"><span class="k">Orçamento Máximo de Prêmio (Risco Total = Prêmio)</span>
+        <span class="v">US$ ${fmt((lopt.sizing||{}).recommended_notional_usd)}</span></div>
+      ${renderChecklistDetails(lopt.checklist)}
+    </div>
+
+    <!-- PILAR 3: VOL TARGETING -->
+    <div class="card" style="margin-top:12px;background:#0e151d">
+      <h3>3. ${vt.title} ${gradePill((vt.checklist||{}).grade, (vt.checklist||{}).score)}</h3>
+      <div class="kv"><span class="k">Alavancagem Máxima (σ_alvo 25% / σ_prev ${fmt(vt.forecast_vol_annual_pct)}%)</span>
+        <span class="v"><b>${fmt(vt.max_recommended_leverage,2)}x</b> (nunca operar 10x–20x)</span></div>
+      <div class="kv"><span class="k">Stop Técnico Fora do Ruído (1,5× σ_dia Yang-Zhang)</span>
+        <span class="v">±${fmt(vt.technical_stop_pct)}% (Long stop ${fmt(vt.stop_long_price,0)} · Short stop ${fmt(vt.stop_short_price,0)})</span></div>
+      <div class="kv"><span class="k">Notional Dimensionado por Estresse</span>
+        <span class="v">US$ ${fmt((vt.sizing||{}).recommended_notional_usd)} (Estresse: US$ ${fmt((vt.sizing||{}).max_loss_stress_usd)})</span></div>
+      ${renderChecklistDetails(vt.checklist)}
+    </div>
+  `;
+  return el;
+}
+
+async function auditBinanceOffer(){
+  const body = {
+    ccy: $('ba-ccy').value,
+    product: $('ba-prod').value,
+    strike: $('ba-strike').value ? Number($('ba-strike').value) : null,
+    dte_days: Number($('ba-dte').value || 14),
+    binance_apr_pct: Number($('ba-apr').value || 25)
+  };
+  $('ba-out').innerHTML = '<span class="spin"></span> auditando superfície e invertendo Black-Scholes...';
+  const r = await fetch('/api/binance-audit', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+  });
+  if(!r.ok){
+    $('ba-out').innerHTML = `<div class="bad">Erro na auditoria: ${await r.text()}</div>`;
+    return;
+  }
+  const j = await r.json();
+  const boxCls = j.approved ? 'note' : 'bad';
+  const structName = j.kind === 'P' ? 'dual_buy_low_put' : 'dual_sell_high_call';
+  $('ba-out').innerHTML = `
+    <div class="${boxCls}">
+      <div class="row" style="justify-content:space-between;margin-bottom:6px">
+        <b>${j.verdict} — ${j.ccy} Strike ${fmt(j.strike,0)} (${j.dte_days}d @ ${fmt(j.binance_apr_pct)}% APR)</b>
+        ${gradePill((j.checklist||{}).grade, (j.checklist||{}).score)}
+      </div>
+      <div>${j.reason}</div>
+      <div class="grid g4" style="margin-top:10px">
+        <div><div class="lbl">IV Embutida na Binance</div><div class="big">${fmt(j.iv_embedded_in_binance_pct)}%</div></div>
+        <div><div class="lbl">IV Referência (Deribit)</div><div class="big">${fmt(j.iv_deribit_reference_pct)}%</div></div>
+        <div><div class="lbl">RV Prevista (Modelo)</div><div class="big">${fmt(j.rv_model_forecast_pct)}%</div></div>
+        <div><div class="lbl">VRP Real da Oferta</div><div class="big" style="color:${j.vrp_of_offer_pts>=1?'var(--ok)':'var(--bad)'}">${fmt(j.vrp_of_offer_pts)} pts</div></div>
+      </div>
+      <div class="kv" style="margin-top:8px"><span class="k">APR Justa na Superfície Deribit / Break-Even do Modelo</span>
+        <span class="v">${fmt(j.fair_market_apr_pct)}% a.a. / mín. ${fmt(j.model_break_even_apr_pct)}% a.a.</span></div>
+      <div class="kv"><span class="k">Probabilidade Estimada de Exercício · Delta · Vega</span>
+        <span class="v">${fmt((j.prob_exercise||0)*100,1)}% · Δ ${fmt((j.greeks||{}).delta,3)} · ν ${fmt((j.greeks||{}).vega,2)}</span></div>
+      <div class="kv"><span class="k">Notional Recomendado · Rendimento Bruto · EV Líquido</span>
+        <span class="v">US$ ${fmt((j.sizing||{}).recommended_notional_usd)} · Bruto US$ ${fmt(j.expected_gross_yield_usd)} · EV <b>US$ ${fmt(j.expected_net_ev_usd)}</b></span></div>
+      <div class="row" style="margin-top:10px">
+        <button class="pri" onclick="prefillTrade('${j.ccy}','${structName}','short_vol',${j.iv_embedded_in_binance_pct},${j.expected_gross_yield_usd},${(j.sizing||{}).recommended_notional_usd},${(j.sizing||{}).max_loss_stress_usd},'${(j.checklist||{}).grade}')">
+          Registrar esta Operação no Diário
+        </button>
+      </div>
+    </div>
+  `;
 }
 async function saveCfg(){
   const b={bankroll:Number($('c-bankroll').value),display_currency:$('c-cur').value,

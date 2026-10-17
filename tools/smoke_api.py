@@ -232,6 +232,69 @@ def main() -> int:
               "orçamento de tempo exposto na tela", f"-> {tp.get('_budget')}")
         check("_breakers" in tp, "estado dos disjuntores exposto na tela")
 
+        # ------------------------------------------------------------ mesa binance
+        print("\n[mesa binance — carry, dual investment auditado e vol-targeting]")
+        bd = jget(c, "/api/binance-desk")
+        check(len(bd.get("desks") or []) == 2, "binance-desk devolve BTC e ETH",
+              f"-> {len(bd.get('desks') or [])}")
+        check("winner" in (bd.get("investor_thesis") or {}), "tese do investidor presente")
+        act = bd.get("action_now") or {}
+        check(act.get("ok") is True and act.get("winner_coin") in ("BTC", "ETH"),
+              "action_now aponta o ativo vencedor do momento", f"-> {act.get('winner_coin')}")
+        check(len(act.get("orders_now") or []) >= 3,
+              "action_now entrega ordens imediatas passo a passo",
+              f"-> {len(act.get('orders_now') or [])} ordens")
+        check(len(act.get("avoid_now") or []) >= 2,
+              "action_now lista armadilhas a evitar agora")
+        bg = act.get("beginner_guide") or {}
+        check(bg.get("ok") is True and len(bg.get("tracks") or []) == 3,
+              "beginner_guide entrega 3 trilhas passo a passo para iniciante",
+              f"-> {[t.get('id') for t in (bg.get('tracks') or [])]}")
+        check(len(bg.get("glossary") or []) >= 5 and len(bg.get("golden_rules") or []) >= 3,
+              "beginner_guide inclui glossário sem jargão e regras de ouro")
+        for d in bd.get("desks") or []:
+            check(d.get("ccy") in ("BTC", "ETH"), f"desk {d.get('ccy')} válido")
+            tr = d.get("trend") or {}
+            check(tr.get("bias") is not None and tr.get("tactical_entry", 0) > 0
+                  and tr.get("tactical_stop", 0) > 0 and tr.get("tactical_tp1", 0) > 0,
+                  f"trend {d.get('ccy')} entrega viés, entrada, stop e alvos",
+                  f"-> {tr.get('bias')} (E:{tr.get('tactical_entry')} S:{tr.get('tactical_stop')} TP1:{tr.get('tactical_tp1')})")
+            st_map = d.get("strategies") or {}
+            check(set(st_map) == {"carry", "dual_investment", "long_options", "vol_target"},
+                  f"desk {d.get('ccy')} traz os 4 veículos da Binance")
+            carry = st_map["carry"]
+            check(carry.get("delta_exposure") == 0.0 and carry.get("net_apr_30d_pct") is not None,
+                  f"carry {d.get('ccy')} delta-neutro com APR líquida",
+                  f"-> +{carry.get('net_apr_30d_pct')}% a.a.")
+            check(len((carry.get("checklist") or {}).get("items") or []) == 11,
+                  f"checklist de 11 itens presente em {d.get('ccy')}")
+            check((carry.get("sizing") or {}).get("max_loss_stress_usd", 0) > 0,
+                  f"sizing por estresse calculado em {d.get('ccy')}")
+
+        # Auditor de oferta da Binance: APR miserável (5%) tem que ser RECUSADA; APR alta (65%) APROVADA
+        r_bad = c.post("/api/binance-audit", json={
+            "ccy": "BTC", "product": "buy_low_put", "strike": 80000,
+            "dte_days": 14, "binance_apr_pct": 5.0
+        }, timeout=60)
+        check(r_bad.status_code == 200, "POST /api/binance-audit (oferta ruim)")
+        jb = r_bad.json() if r_bad.status_code == 200 else {}
+        check(jb.get("approved") is False and "RECUSAR" in (jb.get("verdict") or ""),
+              "oferta com APR de 5% recusada pelo auditor (abaixo do risco real)",
+              f"-> {jb.get('verdict')} (IV embutida {jb.get('iv_embedded_in_binance_pct')}%)")
+
+        r_good = c.post("/api/binance-audit", json={
+            "ccy": "BTC", "product": "buy_low_put", "strike": 80000,
+            "dte_days": 14, "binance_apr_pct": 65.0
+        }, timeout=60)
+        check(r_good.status_code == 200, "POST /api/binance-audit (oferta rica)")
+        jg = r_good.json() if r_good.status_code == 200 else {}
+        check(jg.get("approved") is True and jg.get("expected_net_ev_usd", 0) > 0,
+              "oferta com APR de 65% aprovada com EV positivo",
+              f"-> EV US$ {jg.get('expected_net_ev_usd')} (IV {jg.get('iv_embedded_in_binance_pct')}%)")
+
+        r_sol = c.post("/api/binance-audit", json={"ccy": "SOL", "binance_apr_pct": 25.0}, timeout=60)
+        check(r_sol.status_code == 400, "binance-audit recusa SOL (fora do universo BTC+ETH)")
+
         # ------------------------------------------------------------ trades
         print("\n[trades — o ciclo que nasceu quebrado]")
         legs = [

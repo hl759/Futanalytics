@@ -35,7 +35,10 @@ def check(cond: bool, label: str, detail: str = ""):
 
 
 def norm_options() -> list[dict]:
-    now = dt.datetime.now(dt.timezone.utc)
+    # O fixture foi capturado em 26/set/2026 (ver _provenance.capturado_em).
+    # Usar datetime.now() sobre vencimentos estáticos de set/out/2026 zerava o DTE
+    # assim que o calendário avançava além dos vencimentos capturados.
+    now = dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.timezone.utc)
     out = [o for o in (provider._option_row(r, now) for r in FIX["options_btc_sample"]) if o]
     return sorted(out, key=lambda o: (o["expiry"], o["strike"], o["kind"]))
 

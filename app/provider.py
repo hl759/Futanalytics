@@ -707,6 +707,11 @@ def demo_chain(ccy: str = "BTC", seed: int | None = None) -> list[dict]:
     now = dt.datetime.now(dt.timezone.utc)
     for dte in (2, 7, 14, 30, 60, 90, 180):
         expiries.append((now + dt.timedelta(days=dte)).date())
+    if not any(e.day < 10 for e in expiries):
+        ny = now.year + (1 if now.month == 12 else 0)
+        nm = (now.month % 12) + 1
+        expiries.append(dt.date(ny, nm, 9))
+    expiries = sorted(set(expiries))
     out = []
     for exp in expiries:
         dte = max(1, (exp - now.date()).days)
@@ -935,6 +940,43 @@ async def dvol_with_fallback(ccy: str = "BTC", days: int = 400,
             breaker_note("deribit", False, "série vazia")
     debug["used"] = "demo"
     data = demo_dvol(ccy, days)
+    debug["n"] = len(data)
+    return data, "demo", debug
+
+
+def demo_funding(ccy: str = "BTC", slots: int = 90) -> list[dict]:
+    """Série determinística de funding de 8h ancorada no regime real de 2026 (~0,01%/8h)."""
+    rnd = _Lcg(demo_seed(ccy, salt=31))
+    base = 0.000105 if ccy == "BTC" else 0.000092   # ~11,5% a.a. BTC / ~10,1% a.a. ETH
+    now_ms = int(dt.datetime.now(dt.timezone.utc).replace(
+        minute=0, second=0, microsecond=0).timestamp() * 1000)
+    out = []
+    for i in range(slots):
+        ts = now_ms - (slots - 1 - i) * 8 * 3600 * 1000
+        f8 = max(-0.0002, base + rnd.normal() * 0.000035)
+        out.append({"ts": ts, "interest_8h": round(f8, 7), "funding_8h": round(f8, 7)})
+    return out
+
+
+async def funding_with_fallback(ccy: str = "BTC", days: int = 30,
+                                deadline: float | None = None
+                                ) -> tuple[list[dict], str, dict]:
+    """Funding de perpétuos com fallback determinístico e disjuntor compartilhado."""
+    debug: dict = {"asked": ["deribit"], "errors": {}}
+    if breaker_skip("deribit"):
+        debug["errors"]["deribit"] = _skip_reason("deribit")
+    else:
+        data, err = await _guarded(dr_funding(ccy, days), "deribit", deadline)
+        if err:
+            debug["errors"]["deribit"] = err
+        elif data:
+            debug["used"] = "deribit"
+            debug["n"] = len(data)
+            return data, "deribit", debug
+        else:
+            debug["errors"]["deribit"] = "série de funding vazia"
+    debug["used"] = "demo"
+    data = demo_funding(ccy, max(30, days * 3))
     debug["n"] = len(data)
     return data, "demo", debug
 

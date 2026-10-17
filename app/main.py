@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from . import db, provider, volread
+from . import binance_desk, db, provider, volread
 
 APP_NAME = "SigmaDesk"
 VERSION = "0.1.0-etapa0"
@@ -147,6 +147,17 @@ async def _dvol(ccy: str, s: Settings, deadline: float | None = None):
         return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
     data, source, debug = await provider.dvol_with_fallback(ccy, s.dvol_days,
                                                             deadline=deadline)
+    db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_dvol)
+    db.api_usage_inc(str(dt.date.today()), 1)
+    return data, source, debug
+
+
+async def _funding(ccy: str, s: Settings, deadline: float | None = None):
+    key = f"funding:{ccy}"
+    hit = db.cache_get(key)
+    if hit and hit.get("data"):
+        return hit["data"], hit["source"], {**hit.get("debug", {}), "cached": True}
+    data, source, debug = await provider.funding_with_fallback(ccy, 30, deadline=deadline)
     db.cache_set(key, {"data": data, "source": source, "debug": debug}, s.ttl_dvol)
     db.api_usage_inc(str(dt.date.today()), 1)
     return data, source, debug
@@ -349,7 +360,7 @@ def save_settings(body: SettingsIn):
     cleared = 0
     if set(saved) & _INVALIDATES_CACHE:
         # só os prefixos que _candles/_chain/_dvol realmente escrevem
-        for prefix in ("chain:", "candles:", "dvol:"):
+        for prefix in ("chain:", "candles:", "dvol:", "funding:"):
             cleared += db.cache_clear(prefix)
 
     return {"ok": True, "saved": saved, "rejected": {},
@@ -588,6 +599,9 @@ def labels():
         "structures_defined_risk": [
             "iron_condor", "put_spread", "call_spread", "calendar_spread",
             "diagonal_spread", "butterfly",
+            "cash_and_carry_perp", "cash_and_carry_quarterly",
+            "dual_buy_low_put", "dual_sell_high_call",
+            "binance_opt_straddle", "perp_vol_target",
         ],
         "structures_naked": ["short_strangle", "short_straddle", "short_put", "short_call"],
         "directions": ["short_vol", "long_vol", "neutral_carry", "skew"],
@@ -600,6 +614,92 @@ def labels():
             {"band": "NEGATIVO", "min": None, "action": "não venda prêmio"},
         ],
     }
+
+
+@app.get("/api/binance-desk")
+async def get_binance_desk(ccy: str | None = None):
+    """Mesa Binance: combina leitura de volatilidade (SigmaDesk) com os veículos
+    mais eficientes da Binance (Cash-and-Carry em Futuros USDⓈ-M, Dual Investment
+    auditado contra Black-Scholes/Deribit, Opções de Convexidade e Vol-Targeting).
+    """
+    s = load_settings()
+    targets = [ccy.upper()] if ccy else _ccys(s)
+    targets = [t for t in targets if t in provider.CURRENCIES] or ["BTC"]
+    deadline = time.monotonic() + provider.DEADLINE_S
+
+    async def _one(t: str):
+        read, (candles, _, _), (f_rows, f_src, _) = await asyncio.gather(
+            _read(t, s, deadline), _candles(t, s, deadline), _funding(t, s, deadline))
+        pf = portfolio()
+        desk = binance_desk.build_coin_desk(read, f_rows, f_src, s.model_dump(), pf, candles=candles)
+        desk["is_demo"] = bool(read.get("is_demo") or f_src == "demo")
+        desk["sources"] = {**(read.get("sources") or {}), "funding": f_src}
+        return desk
+
+    desks = await asyncio.gather(*[_one(t) for t in targets])
+    action_now = binance_desk.build_action_now(list(desks), s.model_dump())
+    return {
+        "as_of": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "is_demo": any(d.get("is_demo") for d in desks),
+        "action_now": action_now,
+        "investor_thesis": {
+            "winner": "Arquitetura Híbrida Institucional (Cash-and-Carry Delta-Neutro + Arbitragem de VRP no Dual Investment / Options)",
+            "why": (
+                "95% do varejo perde na Binance operando direção alavancada em perpétuos ou comprando "
+                "opções caras na Binance Options (onde o varejo é bloqueado de vender a descoberto). "
+                "O investidor profissional usa a Binance onde ela é imbatível: (1) liquidez profunda "
+                "de Spot + Perpétuos USDⓈ-M para coletar Funding Rate e Basis sem risco direcional "
+                "(60–70% da banca), e (2) venda coberta de vol via Dual Investment apenas quando o "
+                "SigmaDesk comprova que a APR oferecida bate a IV justa e a RV prevista (30–40% da banca)."
+            ),
+            "pillars": [
+                {"pillar": 1, "name": "Cash-and-Carry Delta-Neutro (Spot + Perp/Trimestral 1x)",
+                 "weight": "60–70%", "edge": "Coleta de Funding (8h) e Basis sem depender de direção"},
+                {"pillar": 2, "name": "Dual Investment Auditado (VRP > +3) ou Convexidade (VRP < 0)",
+                 "weight": "20–30%", "edge": "Prêmio de Risco de Volatilidade auditado contra a Deribit"},
+                {"pillar": 3, "name": "Reserva de Margem / Tático Vol-Targeted",
+                 "weight": "10–20%", "edge": "Colchão contra estresse de cauda e stops dimensionados por Yang-Zhang"},
+            ],
+        },
+        "binance_fees": binance_desk.BINANCE_FEES,
+        "settings": {"bankroll": s.bankroll, "kelly_fraction": s.kelly_fraction,
+                     "stake_cap_pct": s.stake_cap_pct, "portfolio_min_grade": s.portfolio_min_grade},
+        "desks": list(desks),
+        "aviso": ("Ferramenta quantitativa de análise, precificação e gestão de risco. "
+                  "Não é recomendação de investimento nem executa ordens sozinha."),
+    }
+
+
+class BinanceOfferIn(BaseModel):
+    ccy: str = "BTC"
+    product: str = "buy_low_put"
+    strike: float | None = None
+    dte_days: float = 14.0
+    binance_apr_pct: float = 25.0
+
+
+@app.post("/api/binance-audit")
+async def post_binance_audit(body: BinanceOfferIn):
+    """Audita uma oferta de Dual Investment / Opção da Binance contra o preço
+    justo Black-Scholes da superfície Deribit e a RV prevista pelo SigmaDesk.
+    """
+    ccy = body.ccy.upper().strip()
+    if ccy not in provider.CURRENCIES:
+        raise HTTPException(400, f"moeda fora do radar (só {', '.join(provider.CURRENCIES)})")
+    if body.dte_days <= 0 or body.dte_days > 365:
+        raise HTTPException(422, "dte_days deve estar entre 0.5 e 365 dias")
+    if body.binance_apr_pct <= 0 or body.binance_apr_pct > 1000:
+        raise HTTPException(422, "binance_apr_pct deve estar entre 0.1% e 1000%")
+    if body.strike is not None and body.strike <= 0:
+        raise HTTPException(422, "strike deve ser positivo")
+
+    s = load_settings()
+    deadline = time.monotonic() + provider.DEADLINE_S
+    read = await _read(ccy, s, deadline)
+    pf = portfolio()
+    res = binance_desk.audit_binance_offer(read, s.model_dump(), body.model_dump(), pf)
+    res["is_demo"] = read.get("is_demo", False)
+    return res
 
 
 @app.get("/api/health")
