@@ -1,8 +1,19 @@
 services:
   - type: web
-    name: futanalytics
+    name: sigmadesk
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     autoDeploy: true
+    # /api/health responde sem tocar em nenhuma API externa: é seguro como
+    # health check mesmo quando Deribit/Coinbase estão fora do ar (o app cai no
+    # modo demo em vez de morrer).
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Sem worker em background: o free tier não permite processo separado, e
+      # todo refresh é sob demanda com TTL de cache.
+      - key: SIGMADESK_NO_BG
+        value: "1"
